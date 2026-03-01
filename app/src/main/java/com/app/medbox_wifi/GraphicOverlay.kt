@@ -1,5 +1,6 @@
 package com.app.medbox_wifi
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
@@ -8,6 +9,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
+import android.view.animation.LinearInterpolator
 import kotlin.math.max
 
 class GraphicOverlay(context: Context, attrs: AttributeSet?) : View(context, attrs) {
@@ -15,14 +17,26 @@ class GraphicOverlay(context: Context, attrs: AttributeSet?) : View(context, att
     private val graphics = mutableListOf<Graphic>()
     private val transformationMatrix = Matrix()
     
-    // Lens-style colors
+    // Pulse animation for the dots
+    private var pulseValue = 1.0f
+    private val pulseAnimator = ValueAnimator.ofFloat(0.6f, 1.2f).apply {
+        duration = 800
+        repeatMode = ValueAnimator.REVERSE
+        repeatCount = ValueAnimator.INFINITE
+        interpolator = LinearInterpolator()
+        addUpdateListener {
+            pulseValue = it.animatedValue as Float
+            postInvalidate()
+        }
+    }
+
     private val dotColor = Color.parseColor("#FFFFFF")
     private val highlightColor = Color.parseColor("#4285F4") // Google Blue
 
     private val dotPaint = Paint().apply {
         color = dotColor
         style = Paint.Style.FILL
-        alpha = 180
+        alpha = 200
         isAntiAlias = true
     }
 
@@ -64,26 +78,30 @@ class GraphicOverlay(context: Context, attrs: AttributeSet?) : View(context, att
         postInvalidate()
     }
 
-    /**
-     * Correctly maps the coordinates from ML Kit (rotated image space) to the View.
-     */
+    fun startAnimation() {
+        if (!pulseAnimator.isRunning) {
+            pulseAnimator.start()
+        }
+    }
+
+    fun stopAnimation() {
+        pulseAnimator.cancel()
+        pulseValue = 1.0f
+        postInvalidate()
+    }
+
     fun setTransformationInfo(imageWidth: Int, imageHeight: Int, rotationDegrees: Int) {
         val viewWidth = width.toFloat()
         val viewHeight = height.toFloat()
         if (viewWidth == 0f || viewHeight == 0f) return
 
         val matrix = Matrix()
-
-        // ML Kit accounts for rotation internally, so the bounding box is relative 
-        // to the rotated dimensions.
         val rotatedWidth = if (rotationDegrees % 180 == 90) imageHeight.toFloat() else imageWidth.toFloat()
         val rotatedHeight = if (rotationDegrees % 180 == 90) imageWidth.toFloat() else imageHeight.toFloat()
 
-        // Scale to fit "CenterCrop" behavior
         val scale = max(viewWidth / rotatedWidth, viewHeight / rotatedHeight)
         matrix.postScale(scale, scale)
 
-        // Center the coordinate system
         val offsetX = (viewWidth - rotatedWidth * scale) / 2f
         val offsetY = (viewHeight - rotatedHeight * scale) / 2f
         matrix.postTranslate(offsetX, offsetY)
@@ -101,12 +119,13 @@ class GraphicOverlay(context: Context, attrs: AttributeSet?) : View(context, att
                     val rect = graphic.getTranslatedRect()
                     
                     if (graphic.isMatch) {
-                        // Highlight matched medicine with a subtle glow box
                         canvas.drawRoundRect(rect, 8f, 8f, highlightPaint)
                         canvas.drawRoundRect(rect, 8f, 8f, strokePaint)
                     } else {
-                        // Draw Lens-style "searching" dots for other text
-                        canvas.drawCircle(rect.centerX(), rect.centerY(), 8f, dotPaint)
+                        // Lens pulse animation effect
+                        val currentRadius = 8f * pulseValue
+                        dotPaint.alpha = (200 * (2.0f - pulseValue)).toInt().coerceIn(0, 255)
+                        canvas.drawCircle(rect.centerX(), rect.centerY(), currentRadius, dotPaint)
                     }
                 }
             }
@@ -124,8 +143,6 @@ class GraphicOverlay(context: Context, attrs: AttributeSet?) : View(context, att
             return cachedRect ?: translateRect(RectF(block.boundingBox)).also { cachedRect = it }
         }
 
-        override fun draw(canvas: Canvas) {
-            // Drawing is handled in batch in onDraw for performance
-        }
+        override fun draw(canvas: Canvas) {}
     }
 }

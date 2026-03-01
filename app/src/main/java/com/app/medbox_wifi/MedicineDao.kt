@@ -11,12 +11,14 @@ interface MedicineDao {
     suspend fun insertAll(medicines: List<Medicine>)
 
     /**
-     * Case-insensitive matching that checks if a medicine name exists within the scanned text.
+     * Finds medicines where the brand name or generic name matches or is part of the scanned text.
+     * We order by brandName length descending to prioritize more specific matches (e.g., Alaxan over Biogesic if both match).
      */
     @Query("""
         SELECT * FROM ph_medicines 
-        WHERE UPPER(:scannedText) LIKE '%' || UPPER(brandName) || '%' 
-        OR UPPER(:scannedText) LIKE '%' || UPPER(genericName) || '%'
+        WHERE (brandName != '' AND UPPER(:scannedText) LIKE '%' || UPPER(brandName) || '%')
+        OR (genericName != '' AND UPPER(:scannedText) LIKE '%' || UPPER(genericName) || '%')
+        ORDER BY LENGTH(brandName) DESC
         LIMIT 1
     """)
     suspend fun findMatchingMedicine(scannedText: String): Medicine?

@@ -102,12 +102,14 @@ class ScanActivity : AppCompatActivity() {
         bottomSheet.visibility = View.GONE
         fabCapture.visibility = View.VISIBLE
         graphicOverlay.clear()
+        graphicOverlay.stopAnimation()
     }
 
     private fun takePhoto() {
         val imageCapture = imageCapture ?: return
         isProcessingCapture = true
         fabCapture.visibility = View.GONE
+        graphicOverlay.startAnimation()
 
         imageCapture.takePicture(
             ContextCompat.getMainExecutor(this),
@@ -200,8 +202,8 @@ class ScanActivity : AppCompatActivity() {
                     val graphics = blocks.filter { it.text.length > 3 && it.text.any { c -> c.isLetter() } }
                         .map { block ->
                             val cleanText = block.text.replace("[^A-Za-z0-9 ]".toRegex(), " ")
-                            val isMatch = database.medicineDao().findMatchingMedicine(cleanText) != null
-                            GraphicOverlay.TextGraphic(graphicOverlay, block, isMatch)
+                            val match = database.medicineDao().findMatchingMedicine(cleanText)
+                            GraphicOverlay.TextGraphic(graphicOverlay, block, match != null)
                         }
 
                     withContext(Dispatchers.Main) {
@@ -219,18 +221,27 @@ class ScanActivity : AppCompatActivity() {
 
     private fun processOcrResults(blocks: List<TextBlock>, width: Int, height: Int, rotationDegrees: Int) {
         lifecycleScope.launch(Dispatchers.Default) {
-            var foundMedicine: Medicine? = null
+            var bestMatch: Medicine? = null
             val graphics = mutableListOf<GraphicOverlay.TextGraphic>()
             
+            // Priority 1: Look for any Brand Name match across all blocks
             for (block in blocks) {
                 val cleanBlockText = block.text.replace("[^A-Za-z0-9 ]".toRegex(), " ").trim()
                 val match = database.medicineDao().findMatchingMedicine(cleanBlockText)
                 
-                val isMatch = match != null
-                if (isMatch) foundMedicine = match
+                if (match != null) {
+                    // If we found a brand match in the text, prioritize it
+                    if (cleanBlockText.uppercase().contains(match.brandName.uppercase())) {
+                        bestMatch = match
+                        // Don't break, continue to mark all matches visually
+                    } else if (bestMatch == null) {
+                        // generic match, keep it if we haven't found a brand match yet
+                        bestMatch = match
+                    }
+                }
                 
                 if (block.text.length > 3 && block.text.any { it.isLetter() }) {
-                    graphics.add(GraphicOverlay.TextGraphic(graphicOverlay, block, isMatch))
+                    graphics.add(GraphicOverlay.TextGraphic(graphicOverlay, block, match != null))
                 }
             }
 
@@ -239,11 +250,12 @@ class ScanActivity : AppCompatActivity() {
                 graphicOverlay.setTransformationInfo(width, height, rotationDegrees)
                 for (g in graphics) graphicOverlay.add(g)
 
-                if (foundMedicine != null) {
-                    tvMedicineName.text = foundMedicine.brandName
-                    tvGenericName.text = foundMedicine.genericName
-                    tvDescription.text = foundMedicine.description
+                if (bestMatch != null) {
+                    tvMedicineName.text = bestMatch.brandName
+                    tvGenericName.text = bestMatch.genericName
+                    tvDescription.text = bestMatch.description
                     bottomSheet.visibility = View.VISIBLE
+                    graphicOverlay.stopAnimation()
                 } else {
                     Toast.makeText(this@ScanActivity, "No medicine detected. Try angling the camera.", Toast.LENGTH_LONG).show()
                     resetScanner()
