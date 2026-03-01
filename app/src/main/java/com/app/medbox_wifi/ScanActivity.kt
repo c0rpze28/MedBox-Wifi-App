@@ -46,7 +46,7 @@ class ScanActivity : AppCompatActivity() {
         btnSave = findViewById(R.id.btnSave)
         
         database = AppDatabase.getDatabase(this)
-        ocrEngine = TesseractOcrEngine(this)
+        ocrEngine = MlKitOcrEngine() // Switched back to ML Kit
 
         if (allPermissionsGranted()) {
             startCamera()
