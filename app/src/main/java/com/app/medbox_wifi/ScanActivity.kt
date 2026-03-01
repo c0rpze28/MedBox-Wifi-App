@@ -2,51 +2,69 @@ package com.app.medbox_wifi
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
 import android.os.Bundle
 import android.view.View
 import android.widget.Button
-import android.widget.LinearLayout
+import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.appcompat.app.AppCompatActivity
+import androidx.cardview.widget.CardView
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.floatingactionbutton.FloatingActionButton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class ScanActivity : AppCompatActivity() {
     private lateinit var viewFinder: PreviewView
+    private lateinit var ivCapturedImage: ImageView
     private lateinit var graphicOverlay: GraphicOverlay
-    private lateinit var bottomSheet: LinearLayout
-    private lateinit var tvDetectedText: TextView
+    private lateinit var bottomSheet: CardView
+    private lateinit var fabCapture: FloatingActionButton
+    private lateinit var tvMedicineName: TextView
+    private lateinit var tvGenericName: TextView
+    private lateinit var tvDescription: TextView
     private lateinit var btnSave: Button
+    private lateinit var btnClose: Button
     
     private lateinit var cameraExecutor: ExecutorService
-    private lateinit var ocrEngine: OcrEngine
+    private var imageCapture: ImageCapture? = null
+    private val ocrEngine: OcrEngine = MlKitOcrEngine()
     private lateinit var database: AppDatabase
+    private var isProcessingCapture = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_scan)
 
         viewFinder = findViewById(R.id.viewFinder)
+        ivCapturedImage = findViewById(R.id.ivCapturedImage)
         graphicOverlay = findViewById(R.id.graphicOverlay)
         bottomSheet = findViewById(R.id.bottomSheet)
-        tvDetectedText = findViewById(R.id.tvDetectedText)
+        fabCapture = findViewById(R.id.fabCapture)
+        tvMedicineName = findViewById(R.id.tvMedicineName)
+        tvGenericName = findViewById(R.id.tvGenericName)
+        tvDescription = findViewById(R.id.tvDescription)
         btnSave = findViewById(R.id.btnSave)
+        btnClose = findViewById(R.id.btnClose)
         
-        database = AppDatabase.getDatabase(this)
-        ocrEngine = MlKitOcrEngine() // Switched back to ML Kit
+        database = AppDatabase.getDatabase(this, lifecycleScope)
 
         if (allPermissionsGranted()) {
             startCamera()
@@ -56,18 +74,83 @@ class ScanActivity : AppCompatActivity() {
 
         cameraExecutor = Executors.newSingleThreadExecutor()
         
+        fabCapture.setOnClickListener {
+            takePhoto()
+        }
+
         btnSave.setOnClickListener {
-            val text = tvDetectedText.text.toString()
+            val text = tvMedicineName.text.toString()
             if (text.isNotEmpty()) {
                 lifecycleScope.launch(Dispatchers.IO) {
                     database.scannedTextDao().insert(ScannedText(content = text))
-                    runOnUiThread {
-                        Toast.makeText(this@ScanActivity, "Saved!", Toast.LENGTH_SHORT).show()
-                        bottomSheet.visibility = View.GONE
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@ScanActivity, "Logged: $text", Toast.LENGTH_SHORT).show()
+                        resetScanner()
                     }
                 }
             }
         }
+
+        btnClose.setOnClickListener {
+            resetScanner()
+        }
+    }
+
+    private fun resetScanner() {
+        isProcessingCapture = false
+        ivCapturedImage.visibility = View.GONE
+        bottomSheet.visibility = View.GONE
+        fabCapture.visibility = View.VISIBLE
+        graphicOverlay.clear()
+    }
+
+    private fun takePhoto() {
+        val imageCapture = imageCapture ?: return
+        isProcessingCapture = true
+        fabCapture.visibility = View.GONE
+
+        imageCapture.takePicture(
+            ContextCompat.getMainExecutor(this),
+            object : ImageCapture.OnImageCapturedCallback() {
+                @OptIn(ExperimentalGetImage::class)
+                override fun onCaptureSuccess(imageProxy: ImageProxy) {
+                    val bitmap = imageProxyToBitmap(imageProxy)
+                    ivCapturedImage.setImageBitmap(bitmap)
+                    ivCapturedImage.visibility = View.VISIBLE
+
+                    val mediaImage = imageProxy.image
+                    if (mediaImage != null) {
+                        val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+                        val width = imageProxy.width
+                        val height = imageProxy.height
+                        
+                        ocrEngine.processImage(mediaImage, rotationDegrees) { blocks ->
+                            processOcrResults(blocks, width, height, rotationDegrees)
+                            imageProxy.close()
+                        }
+                    } else {
+                        imageProxy.close()
+                    }
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    Toast.makeText(baseContext, "Capture failed: ${exception.message}", Toast.LENGTH_SHORT).show()
+                    resetScanner()
+                }
+            }
+        )
+    }
+
+    private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
+        val buffer: ByteBuffer = image.planes[0].buffer
+        val bytes = ByteArray(buffer.remaining())
+        buffer.get(bytes)
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        
+        val matrix = Matrix()
+        matrix.postRotate(image.imageInfo.rotationDegrees.toFloat())
+        
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 
     private fun startCamera() {
@@ -78,18 +161,26 @@ class ScanActivity : AppCompatActivity() {
                 it.setSurfaceProvider(viewFinder.surfaceProvider)
             }
 
+            imageCapture = ImageCapture.Builder().build()
+
             val imageAnalyzer = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .also {
                     it.setAnalyzer(cameraExecutor) { imageProxy ->
-                        processImageProxy(imageProxy)
+                        if (!isProcessingCapture) {
+                            processLiveAnalysis(imageProxy)
+                        } else {
+                            imageProxy.close()
+                        }
                     }
                 }
 
             try {
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalyzer)
+                cameraProvider.bindToLifecycle(
+                    this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageCapture, imageAnalyzer
+                )
             } catch (exc: Exception) {
                 Toast.makeText(this, "Camera bind failed", Toast.LENGTH_SHORT).show()
             }
@@ -97,25 +188,26 @@ class ScanActivity : AppCompatActivity() {
     }
 
     @OptIn(ExperimentalGetImage::class)
-    private fun processImageProxy(imageProxy: ImageProxy) {
+    private fun processLiveAnalysis(imageProxy: ImageProxy) {
         val mediaImage = imageProxy.image
         if (mediaImage != null) {
-            ocrEngine.processImage(mediaImage, imageProxy.imageInfo.rotationDegrees) { blocks ->
-                runOnUiThread {
-                    graphicOverlay.clear()
-                    graphicOverlay.setTransformationInfo(imageProxy.width, imageProxy.height)
-                    
-                    if (blocks.isNotEmpty()) {
-                        // Show the first block text in the bottom sheet
-                        tvDetectedText.text = blocks[0].text
-                        bottomSheet.visibility = View.VISIBLE
-                    } else {
-                        bottomSheet.visibility = View.GONE
-                    }
-                    
-                    for (block in blocks) {
-                        val graphic = TextGraphic(graphicOverlay, block)
-                        graphicOverlay.add(graphic)
+            val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+            val width = imageProxy.width
+            val height = imageProxy.height
+            
+            ocrEngine.processImage(mediaImage, rotationDegrees) { blocks ->
+                lifecycleScope.launch(Dispatchers.Default) {
+                    val graphics = blocks.filter { it.text.length > 3 && it.text.any { c -> c.isLetter() } }
+                        .map { block ->
+                            val cleanText = block.text.replace("[^A-Za-z0-9 ]".toRegex(), " ")
+                            val isMatch = database.medicineDao().findMatchingMedicine(cleanText) != null
+                            GraphicOverlay.TextGraphic(graphicOverlay, block, isMatch)
+                        }
+
+                    withContext(Dispatchers.Main) {
+                        graphicOverlay.clear()
+                        graphicOverlay.setTransformationInfo(width, height, rotationDegrees)
+                        for (g in graphics) graphicOverlay.add(g)
                     }
                 }
                 imageProxy.close()
@@ -125,20 +217,37 @@ class ScanActivity : AppCompatActivity() {
         }
     }
 
-    private class TextGraphic(
-        overlay: GraphicOverlay,
-        private val block: TextBlock
-    ) : GraphicOverlay.Graphic(overlay) {
-        private val rectPaint = Paint().apply {
-            color = Color.WHITE
-            style = Paint.Style.STROKE
-            strokeWidth = 4f
-        }
+    private fun processOcrResults(blocks: List<TextBlock>, width: Int, height: Int, rotationDegrees: Int) {
+        lifecycleScope.launch(Dispatchers.Default) {
+            var foundMedicine: Medicine? = null
+            val graphics = mutableListOf<GraphicOverlay.TextGraphic>()
+            
+            for (block in blocks) {
+                val cleanBlockText = block.text.replace("[^A-Za-z0-9 ]".toRegex(), " ").trim()
+                val match = database.medicineDao().findMatchingMedicine(cleanBlockText)
+                
+                val isMatch = match != null
+                if (isMatch) foundMedicine = match
+                
+                if (block.text.length > 3 && block.text.any { it.isLetter() }) {
+                    graphics.add(GraphicOverlay.TextGraphic(graphicOverlay, block, isMatch))
+                }
+            }
 
-        override fun draw(canvas: android.graphics.Canvas) {
-            block.boundingBox?.let { rect ->
-                val rectF = RectF(rect)
-                canvas.drawRect(rectF, rectPaint)
+            withContext(Dispatchers.Main) {
+                graphicOverlay.clear()
+                graphicOverlay.setTransformationInfo(width, height, rotationDegrees)
+                for (g in graphics) graphicOverlay.add(g)
+
+                if (foundMedicine != null) {
+                    tvMedicineName.text = foundMedicine.brandName
+                    tvGenericName.text = foundMedicine.genericName
+                    tvDescription.text = foundMedicine.description
+                    bottomSheet.visibility = View.VISIBLE
+                } else {
+                    Toast.makeText(this@ScanActivity, "No medicine detected. Try angling the camera.", Toast.LENGTH_LONG).show()
+                    resetScanner()
+                }
             }
         }
     }

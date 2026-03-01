@@ -10,7 +10,7 @@ activity = "1.8.0"
 constraintlayout = "2.1.4"
 mlkitTextRecognition = "19.0.1"
 camerax = "1.5.3"
-room = "2.6.1"
+room = "2.7.0-alpha11"
 ksp = "2.0.0-1.0.21"
 
 [libraries]
