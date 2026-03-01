@@ -5,6 +5,7 @@ pluginManagement {
                 includeGroupByRegex("com\\.android.*")
                 includeGroupByRegex("com\\.google.*")
                 includeGroupByRegex("androidx.*")
+                includeGroupByRegex("com\\.google\\.devtools\\.ksp.*")
             }
         }
         mavenCentral()
@@ -19,9 +20,9 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven { url = uri("https://jitpack.io") }
     }
 }
 
-rootProject.name = "MedBox-Wifi"
+rootProject.name = "MedBoxWifi"
 include(":app")
- 
