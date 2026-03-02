@@ -2,7 +2,6 @@ package com.app.medbox_wifi
 
 import android.content.Intent
 import android.graphics.*
-import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.view.View
 import android.widget.Button
@@ -44,7 +43,9 @@ class MainActivity : AppCompatActivity() {
         val btnScan = findViewById<Button>(R.id.btnScan)
 
         adapter = MedicineAdapter { loggedMed ->
-            Toast.makeText(this, "Clicked ${loggedMed.brandName}", Toast.LENGTH_SHORT).show()
+            val intent = Intent(this, EditMedicineActivity::class.java)
+            intent.putExtra("MEDICINE_ID", loggedMed.id)
+            startActivity(intent)
         }
 
         rvRecentLogs.layoutManager = LinearLayoutManager(this)
@@ -77,23 +78,21 @@ class MainActivity : AppCompatActivity() {
                     return
                 }
 
-                // Draw Red Background with Rounded Corners
                 val paint = Paint().apply { color = Color.parseColor("#FF3B30") }
                 val background = RectF(itemView.left.toFloat(), itemView.top.toFloat(), itemView.right.toFloat(), itemView.bottom.toFloat())
                 c.drawRoundRect(background, 16f * resources.displayMetrics.density, 16f * resources.displayMetrics.density, paint)
 
-                // Draw Trash Icon
                 val icon = ContextCompat.getDrawable(this@MainActivity, android.R.drawable.ic_menu_delete)
                 icon?.let {
                     val iconMargin = (itemHeight - it.intrinsicHeight) / 2
                     val iconTop = itemView.top + (itemHeight - it.intrinsicHeight) / 2
                     val iconBottom = iconTop + it.intrinsicHeight
                     
-                    if (dX > 0) { // Swipe Right
+                    if (dX > 0) {
                         val iconLeft = itemView.left + iconMargin
                         val iconRight = iconLeft + it.intrinsicWidth
                         it.setBounds(iconLeft, iconTop, iconRight, iconBottom)
-                    } else if (dX < 0) { // Swipe Left
+                    } else if (dX < 0) {
                         val iconRight = itemView.right - iconMargin
                         val iconLeft = iconRight - it.intrinsicWidth
                         it.setBounds(iconLeft, iconTop, iconRight, iconBottom)

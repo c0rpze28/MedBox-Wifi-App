@@ -9,7 +9,10 @@ data class LoggedMedicine(
     val brandName: String,
     val genericName: String,
     val dosage: String = "",
-    val quantity: String = "",
+    val quantity: Int = 0,
+    val expiryDate: Long = 0,
+    val intakeTime: String = "",
+    val remindersEnabled: Boolean = false,
     val notes: String = "",
     val timestamp: Long = System.currentTimeMillis()
 )
