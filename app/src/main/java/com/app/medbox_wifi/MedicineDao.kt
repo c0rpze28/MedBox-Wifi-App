@@ -11,14 +11,21 @@ interface MedicineDao {
     suspend fun insertAll(medicines: List<Medicine>)
 
     /**
-     * Finds medicines where the brand name or generic name matches or is part of the scanned text.
-     * We order by brandName length descending to prioritize more specific matches (e.g., Alaxan over Biogesic if both match).
+     * Finds the best matching medicine using a scoring system:
+     * 1. Brand matches get 100 points + their length.
+     * 2. Generic matches get 50 points + their length.
+     * This ensures 'Alaxan' beats 'Biogesic' even if 'Paracetamol' is detected.
      */
     @Query("""
-        SELECT * FROM ph_medicines 
-        WHERE (brandName != '' AND UPPER(:scannedText) LIKE '%' || UPPER(brandName) || '%')
-        OR (genericName != '' AND UPPER(:scannedText) LIKE '%' || UPPER(genericName) || '%')
-        ORDER BY LENGTH(brandName) DESC
+        SELECT *, 
+        (CASE 
+            WHEN (brandName != '' AND UPPER(:scannedText) LIKE '%' || UPPER(brandName) || '%') THEN 100 + LENGTH(brandName)
+            WHEN (genericName != '' AND UPPER(:scannedText) LIKE '%' || UPPER(genericName) || '%') THEN 50 + LENGTH(genericName)
+            ELSE 0 
+        END) as matchScore
+        FROM ph_medicines 
+        WHERE matchScore > 0
+        ORDER BY matchScore DESC
         LIMIT 1
     """)
     suspend fun findMatchingMedicine(scannedText: String): Medicine?

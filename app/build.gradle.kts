@@ -42,6 +42,50 @@ android {
     }
 }
 
+// Robust task to clean all launcher icons and setup the new one correctly
+tasks.register("setupLauncherIcon") {
+    doLast {
+        val resDir = file("src/main/res")
+        val logoFile = file("src/main/assets/logo/medicine_bin.png")
+        
+        if (!logoFile.exists()) {
+            throw GradleException("Logo file not found at ${logoFile.absolutePath}")
+        }
+
+        // 1. Delete ALL existing ic_launcher files everywhere in mipmap folders
+        resDir.listFiles { f -> f.isDirectory && f.name.startsWith("mipmap") }?.forEach { dir ->
+            dir.listFiles { f -> f.name.startsWith("ic_launcher") }?.forEach { it.delete() }
+        }
+
+        // 2. Setup the drawable folders
+        val xxxhdpiDir = File(resDir, "drawable-xxxhdpi")
+        if (!xxxhdpiDir.exists()) xxxhdpiDir.mkdirs()
+        logoFile.copyTo(File(xxxhdpiDir, "ic_app_logo.png"), true)
+
+        // 3. Create/Update Adaptive Icon XMLs in anydpi
+        val anyDpiDir = File(resDir, "mipmap-anydpi")
+        if (!anyDpiDir.exists()) anyDpiDir.mkdirs()
+
+        File(anyDpiDir, "ic_launcher.xml").writeText("""
+            <?xml version="1.0" encoding="utf-8"?>
+            <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+                <background android:drawable="@drawable/ic_launcher_background" />
+                <foreground android:drawable="@drawable/ic_launcher_foreground" />
+            </adaptive-icon>
+        """.trimIndent())
+
+        File(anyDpiDir, "ic_launcher_round.xml").writeText("""
+            <?xml version="1.0" encoding="utf-8"?>
+            <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+                <background android:drawable="@drawable/ic_launcher_background" />
+                <foreground android:drawable="@drawable/ic_launcher_foreground" />
+            </adaptive-icon>
+        """.trimIndent())
+        
+        println("Launcher icons successfully reset and setup as Adaptive Icons.")
+    }
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)

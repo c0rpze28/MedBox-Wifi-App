@@ -9,10 +9,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-@Database(entities = [ScannedText::class, Medicine::class], version = 3)
+@Database(entities = [ScannedText::class, Medicine::class, LoggedMedicine::class], version = 4)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun scannedTextDao(): ScannedTextDao
     abstract fun medicineDao(): MedicineDao
+    abstract fun loggedMedicineDao(): LoggedMedicineDao
 
     companion object {
         @Volatile
@@ -47,7 +48,6 @@ abstract class AppDatabase : RoomDatabase() {
 
             override fun onOpen(db: SupportSQLiteDatabase) {
                 super.onOpen(db)
-                // Always check if we need to repopulate on open if version changed
                 INSTANCE?.let { database ->
                     scope.launch(Dispatchers.IO) {
                         if (database.medicineDao().getMedicineCount() == 0) {

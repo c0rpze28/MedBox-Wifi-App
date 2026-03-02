@@ -15,6 +15,7 @@ import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.annotation.OptIn
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.cardview.widget.CardView
 import androidx.camera.core.*
@@ -79,20 +80,62 @@ class ScanActivity : AppCompatActivity() {
         }
 
         btnSave.setOnClickListener {
-            val text = tvMedicineName.text.toString()
-            if (text.isNotEmpty()) {
-                lifecycleScope.launch(Dispatchers.IO) {
-                    database.scannedTextDao().insert(ScannedText(content = text))
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(this@ScanActivity, "Logged: $text", Toast.LENGTH_SHORT).show()
-                        resetScanner()
-                    }
-                }
-            }
+            checkAndSave()
         }
 
         btnClose.setOnClickListener {
             resetScanner()
+        }
+    }
+
+    private fun checkAndSave() {
+        val brand = tvMedicineName.text.toString()
+        val generic = tvGenericName.text.toString()
+        
+        lifecycleScope.launch(Dispatchers.IO) {
+            // Check if it already exists
+            val existing = database.loggedMedicineDao().getByBrandName(brand)
+            if (existing != null) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@ScanActivity, "$brand is already logged.", Toast.LENGTH_SHORT).show()
+                    finish()
+                }
+                return@launch
+            }
+
+            val currentLogs = database.loggedMedicineDao().getRecentLogs()
+            
+            withContext(Dispatchers.Main) {
+                if (currentLogs.size >= 6) {
+                    showReplacementDialog(brand, generic, currentLogs)
+                } else {
+                    saveMedicine(brand, generic)
+                }
+            }
+        }
+    }
+
+    private fun showReplacementDialog(newBrand: String, newGeneric: String, currentLogs: List<LoggedMedicine>) {
+        val medicineNames = currentLogs.map { it.brandName }.toTypedArray()
+        
+        AlertDialog.Builder(this)
+            .setTitle("Replace an entry?")
+            .setItems(medicineNames) { _, which ->
+                val toReplace = currentLogs[which]
+                lifecycleScope.launch(Dispatchers.IO) {
+                    database.loggedMedicineDao().delete(toReplace)
+                    saveMedicine(newBrand, newGeneric)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private suspend fun saveMedicine(brand: String, generic: String) {
+        database.loggedMedicineDao().insert(LoggedMedicine(brandName = brand, genericName = generic))
+        withContext(Dispatchers.Main) {
+            Toast.makeText(this@ScanActivity, "Logged: $brand", Toast.LENGTH_SHORT).show()
+            finish()
         }
     }
 
@@ -224,24 +267,15 @@ class ScanActivity : AppCompatActivity() {
             var bestMatch: Medicine? = null
             val graphics = mutableListOf<GraphicOverlay.TextGraphic>()
             
-            // Priority 1: Look for any Brand Name match across all blocks
             for (block in blocks) {
                 val cleanBlockText = block.text.replace("[^A-Za-z0-9 ]".toRegex(), " ").trim()
                 val match = database.medicineDao().findMatchingMedicine(cleanBlockText)
                 
-                if (match != null) {
-                    // If we found a brand match in the text, prioritize it
-                    if (cleanBlockText.uppercase().contains(match.brandName.uppercase())) {
-                        bestMatch = match
-                        // Don't break, continue to mark all matches visually
-                    } else if (bestMatch == null) {
-                        // generic match, keep it if we haven't found a brand match yet
-                        bestMatch = match
-                    }
-                }
+                val isMatch = match != null
+                if (isMatch) bestMatch = match
                 
                 if (block.text.length > 3 && block.text.any { it.isLetter() }) {
-                    graphics.add(GraphicOverlay.TextGraphic(graphicOverlay, block, match != null))
+                    graphics.add(GraphicOverlay.TextGraphic(graphicOverlay, block, isMatch))
                 }
             }
 

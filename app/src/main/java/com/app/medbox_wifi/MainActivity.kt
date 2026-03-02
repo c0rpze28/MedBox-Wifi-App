@@ -1,14 +1,32 @@
 package com.app.medbox_wifi
 
 import android.content.Intent
+import android.graphics.*
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
+import android.view.View
 import android.widget.Button
+import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.ItemTouchHelper
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
+    private lateinit var database: AppDatabase
+    private lateinit var adapter: MedicineAdapter
+    private lateinit var rvRecentLogs: RecyclerView
+    private lateinit var tvEmptyState: TextView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -19,10 +37,102 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
+        database = AppDatabase.getDatabase(this, lifecycleScope)
+        
+        rvRecentLogs = findViewById(R.id.rvRecentLogs)
+        tvEmptyState = findViewById(R.id.tvEmptyState)
         val btnScan = findViewById<Button>(R.id.btnScan)
+
+        adapter = MedicineAdapter { loggedMed ->
+            Toast.makeText(this, "Clicked ${loggedMed.brandName}", Toast.LENGTH_SHORT).show()
+        }
+
+        rvRecentLogs.layoutManager = LinearLayoutManager(this)
+        rvRecentLogs.adapter = adapter
+
+        val itemTouchHelperCallback = object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT) {
+            override fun onMove(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean = false
+
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+                val position = viewHolder.adapterPosition
+                val medicineToDelete = adapter.currentList[position]
+                
+                lifecycleScope.launch(Dispatchers.IO) {
+                    database.loggedMedicineDao().delete(medicineToDelete)
+                    withContext(Dispatchers.Main) {
+                        loadRecentLogs()
+                        Toast.makeText(this@MainActivity, "${medicineToDelete.brandName} removed", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+
+            override fun onChildDraw(c: Canvas, recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder, dX: Float, dY: Float, actionState: Int, isCurrentlyActive: Boolean) {
+                val itemView = viewHolder.itemView
+                val itemHeight = itemView.bottom - itemView.top
+                val isCanceled = dX == 0f && !isCurrentlyActive
+
+                if (isCanceled) {
+                    clearCanvas(c, itemView.right + dX, itemView.top.toFloat(), itemView.right.toFloat(), itemView.bottom.toFloat())
+                    super.onChildDraw(c, recyclerView, viewHolder, dX, dY, actionState, isCurrentlyActive)
+                    return
+                }
+
+                // Draw Red Background with Rounded Corners
+                val paint = Paint().apply { color = Color.parseColor("#FF3B30") }
+                val background = RectF(itemView.left.toFloat(), itemView.top.toFloat(), itemView.right.toFloat(), itemView.bottom.toFloat())
+                c.drawRoundRect(background, 16f * resources.displayMetrics.density, 16f * resources.displayMetrics.density, paint)
+
+                // Draw Trash Icon
+                val icon = ContextCompat.getDrawable(this@MainActivity, android.R.drawable.ic_menu_delete)
+                icon?.let {
+                    val iconMargin = (itemHeight - it.intrinsicHeight) / 2
+                    val iconTop = itemView.top + (itemHeight - it.intrinsicHeight) / 2
+                    val iconBottom = iconTop + it.intrinsicHeight
+                    
+                    if (dX > 0) { // Swipe Right
+                        val iconLeft = itemView.left + iconMargin
+                        val iconRight = iconLeft + it.intrinsicWidth
+                        it.setBounds(iconLeft, iconTop, iconRight, iconBottom)
+                    } else if (dX < 0) { // Swipe Left
+                        val iconRight = itemView.right - iconMargin
+                        val iconLeft = iconRight - it.intrinsicWidth
+                        it.setBounds(iconLeft, iconTop, iconRight, iconBottom)
+                    }
+                    it.draw(c)
+                }
+
+                super.onChildDraw(c, recyclerView, viewHolder, dX, dY, actionState, isCurrentlyActive)
+            }
+        }
+
+        ItemTouchHelper(itemTouchHelperCallback).attachToRecyclerView(rvRecentLogs)
+
         btnScan.setOnClickListener {
             val intent = Intent(this, ScanActivity::class.java)
             startActivity(intent)
+        }
+    }
+
+    private fun clearCanvas(c: Canvas?, left: Float, top: Float, right: Float, bottom: Float) {
+        c?.drawRect(left, top, right, bottom, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR) })
+    }
+
+    override fun onResume() {
+        super.onResume()
+        loadRecentLogs()
+    }
+
+    private fun loadRecentLogs() {
+        lifecycleScope.launch {
+            val logs = database.loggedMedicineDao().getRecentLogs()
+            if (logs.isEmpty()) {
+                tvEmptyState.visibility = View.VISIBLE
+                rvRecentLogs.visibility = View.GONE
+            } else {
+                tvEmptyState.visibility = View.GONE
+                rvRecentLogs.visibility = View.VISIBLE
+                adapter.submitList(logs)
+            }
         }
     }
 }
