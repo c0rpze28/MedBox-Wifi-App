@@ -9,7 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-@Database(entities = [ScannedText::class, Medicine::class, LoggedMedicine::class], version = 4)
+@Database(entities = [ScannedText::class, Medicine::class, LoggedMedicine::class], version = 13)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun scannedTextDao(): ScannedTextDao
     abstract fun medicineDao(): MedicineDao
@@ -59,17 +59,19 @@ abstract class AppDatabase : RoomDatabase() {
 
             suspend fun populateDatabase(medicineDao: MedicineDao) {
                 val medicines = listOf(
+                    Medicine(brandName = "Neozep Forte", genericName = "Phenylephrine HCl / Chlorphenamine Maleate / Paracetamol", description = "For relief of flu symptoms and clogged nose"),
+                    Medicine(brandName = "Neozep", genericName = "Phenylephrine HCl / Chlorphenamine Maleate / Paracetamol", description = "For relief of flu symptoms and clogged nose"),
                     Medicine(brandName = "Biogesic", genericName = "Paracetamol", description = "For fever and pain relief"),
-                    Medicine(brandName = "Neozep", genericName = "Phenylephrine HCl / Chlorphenamine Maleate / Paracetamol", description = "For relief of clogged nose, runny nose, postnasal drip, itchy and watery eyes"),
-                    Medicine(brandName = "Bioflu", genericName = "Phenylephrine HCl / Chlorphenamine Maleate / Paracetamol", description = "For relief of flu symptoms like fever, body aches, and clogged nose"),
+                    Medicine(brandName = "Bioflu", genericName = "Phenylephrine HCl / Chlorphenamine Maleate / Paracetamol", description = "For relief of flu symptoms"),
+                    Medicine(brandName = "Alaxan FR", genericName = "Ibuprofen + Paracetamol", description = "For relief of body aches and pains"),
                     Medicine(brandName = "Alaxan", genericName = "Ibuprofen + Paracetamol", description = "For relief of body aches and pains"),
-                    Medicine(brandName = "Ascof", genericName = "Lagundi (Vitex negundo L.)", description = "Herbal medicine for cough relief"),
+                    Medicine(brandName = "Ascof", genericName = "Lagundi", description = "Herbal medicine for cough relief"),
                     Medicine(brandName = "Solmux", genericName = "Carbocisteine", description = "For cough with phlegm"),
                     Medicine(brandName = "Tempra", genericName = "Paracetamol", description = "Fever and pain relief for children"),
-                    Medicine(brandName = "Enervon", genericName = "Vitamin B-Complex + Vitamin C", description = "Nutritional supplement for energy and immunity"),
+                    Medicine(brandName = "Enervon", genericName = "Vitamin B-Complex + Vitamin C", description = "Nutritional supplement"),
                     Medicine(brandName = "Potencee", genericName = "Vitamin C", description = "Immunity booster"),
-                    Medicine(brandName = "Medicol", genericName = "Ibuprofen", description = "For pain relief and inflammation"),
-                    Medicine(brandName = "Diatabs", genericName = "Loperamide", description = "Used for the control and symptomatic relief of acute non-specific diarrhea and chronic diarrhea")
+                    Medicine(brandName = "Medicol", genericName = "Ibuprofen", description = "For pain relief"),
+                    Medicine(brandName = "Diatabs", genericName = "Loperamide", description = "For diarrhea relief")
                 )
                 medicineDao.insertAll(medicines)
             }

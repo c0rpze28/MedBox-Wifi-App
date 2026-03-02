@@ -1,7 +1,12 @@
 package com.app.medbox_wifi
 
+import android.app.AlarmManager
 import android.app.DatePickerDialog
+import android.app.PendingIntent
 import android.app.TimePickerDialog
+import android.content.Context
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.widget.TextView
 import android.widget.Toast
@@ -100,15 +105,19 @@ class EditMedicineActivity : AppCompatActivity() {
     }
 
     private fun showTimePicker() {
+        val hour = calendar.get(Calendar.HOUR_OF_DAY)
+        val minute = calendar.get(Calendar.MINUTE)
+        
         TimePickerDialog(
             this,
-            { _, hourOfDay, minute ->
-                val time = String.format(Locale.getDefault(), "%02d:%02d", hourOfDay, minute)
+            { _, hourOfDay, m ->
+                calendar.set(Calendar.HOUR_OF_DAY, hourOfDay)
+                calendar.set(Calendar.MINUTE, m)
+                calendar.set(Calendar.SECOND, 0)
+                val time = String.format(Locale.getDefault(), "%02d:%02d", hourOfDay, m)
                 etIntakeTime.setText(time)
             },
-            calendar.get(Calendar.HOUR_OF_DAY),
-            calendar.get(Calendar.MINUTE),
-            true
+            hour, minute, true
         ).show()
     }
 
@@ -126,10 +135,75 @@ class EditMedicineActivity : AppCompatActivity() {
 
         lifecycleScope.launch(Dispatchers.IO) {
             database.loggedMedicineDao().update(updatedMed)
+            if (updatedMed.remindersEnabled) {
+                setAlarm(updatedMed)
+            } else {
+                cancelAlarm(updatedMed)
+            }
             withContext(Dispatchers.Main) {
                 Toast.makeText(this@EditMedicineActivity, "Details Updated", Toast.LENGTH_SHORT).show()
                 finish()
             }
         }
+    }
+
+    private fun setAlarm(medicine: LoggedMedicine) {
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = Intent(this, ReminderReceiver::class.java).apply {
+            putExtra("BRAND_NAME", medicine.brandName)
+            putExtra("DOSAGE", medicine.dosage)
+        }
+        
+        val pendingIntent = PendingIntent.getBroadcast(
+            this, medicine.id, intent, 
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Set the alarm time
+        val alarmTime = Calendar.getInstance().apply {
+            val timeParts = medicine.intakeTime.split(":")
+            if (timeParts.size == 2) {
+                set(Calendar.HOUR_OF_DAY, timeParts[0].toInt())
+                set(Calendar.MINUTE, timeParts[1].toInt())
+                set(Calendar.SECOND, 0)
+                
+                // If time has passed today, set for tomorrow
+                if (before(Calendar.getInstance())) {
+                    add(Calendar.DATE, 1)
+                }
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (alarmManager.canScheduleExactAlarms()) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    alarmTime.timeInMillis,
+                    pendingIntent
+                )
+            } else {
+                alarmManager.setAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    alarmTime.timeInMillis,
+                    pendingIntent
+                )
+            }
+        } else {
+            alarmManager.setExactAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                alarmTime.timeInMillis,
+                pendingIntent
+            )
+        }
+    }
+
+    private fun cancelAlarm(medicine: LoggedMedicine) {
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = Intent(this, ReminderReceiver::class.java)
+        val pendingIntent = PendingIntent.getBroadcast(
+            this, medicine.id, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        alarmManager.cancel(pendingIntent)
     }
 }

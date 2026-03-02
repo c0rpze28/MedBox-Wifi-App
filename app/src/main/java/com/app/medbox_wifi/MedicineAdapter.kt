@@ -7,6 +7,8 @@ import android.widget.TextView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import java.text.SimpleDateFormat
+import java.util.*
 
 class MedicineAdapter(private val onClick: (LoggedMedicine) -> Unit) :
     ListAdapter<LoggedMedicine, MedicineAdapter.MedicineViewHolder>(MedicineDiffCallback()) {
@@ -26,6 +28,9 @@ class MedicineAdapter(private val onClick: (LoggedMedicine) -> Unit) :
         private val tvBrandName: TextView = itemView.findViewById(R.id.tvBrandName)
         private val tvGenericName: TextView = itemView.findViewById(R.id.tvGenericName)
         private val tvAvatarLetter: TextView = itemView.findViewById(R.id.tvAvatarLetter)
+        private val tvIntakeTime: TextView = itemView.findViewById(R.id.tvIntakeTime)
+        private val tvQuantity: TextView = itemView.findViewById(R.id.tvQuantity)
+        private val tvExpiryDate: TextView = itemView.findViewById(R.id.tvExpiryDate)
         private var currentMedicine: LoggedMedicine? = null
 
         init {
@@ -38,9 +43,24 @@ class MedicineAdapter(private val onClick: (LoggedMedicine) -> Unit) :
             currentMedicine = medicine
             tvBrandName.text = medicine.brandName
             tvGenericName.text = medicine.genericName
-            
-            // Set the avatar letter based on the first character of the brand name
             tvAvatarLetter.text = medicine.brandName.take(1).uppercase()
+            
+            if (medicine.intakeTime.isNotEmpty()) {
+                tvIntakeTime.text = medicine.intakeTime
+                tvIntakeTime.visibility = View.VISIBLE
+            } else {
+                tvIntakeTime.visibility = View.GONE
+            }
+
+            tvQuantity.text = "Qty: ${medicine.quantity}"
+            
+            if (medicine.expiryDate > 0) {
+                val sdf = SimpleDateFormat("MMM yyyy", Locale.getDefault())
+                tvExpiryDate.text = "Exp: ${sdf.format(Date(medicine.expiryDate))}"
+                tvExpiryDate.visibility = View.VISIBLE
+            } else {
+                tvExpiryDate.visibility = View.GONE
+            }
         }
     }
 
