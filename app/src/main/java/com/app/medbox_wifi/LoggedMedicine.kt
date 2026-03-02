@@ -14,5 +14,6 @@ data class LoggedMedicine(
     val intakeTime: String = "",
     val remindersEnabled: Boolean = false,
     val notes: String = "",
+    val pillboxNumber: Int = 0,
     val timestamp: Long = System.currentTimeMillis()
 )

@@ -34,6 +34,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.math.min
 
 class ScanActivity : AppCompatActivity() {
     private lateinit var viewFinder: PreviewView
@@ -252,10 +253,8 @@ class ScanActivity : AppCompatActivity() {
     private fun processOcrResults(blocks: List<TextBlock>, width: Int, height: Int, rotationDegrees: Int) {
         lifecycleScope.launch(Dispatchers.Default) {
             val fullRawText = blocks.joinToString("\n") { it.text }
-            
-            // Comprehensive cleaning for better identification
-            val cleanedTextForSearch = fullRawText.uppercase()
-                .replace("(?<=\\d)O|O(?=\\d)".toRegex(), "0") // OCR O->0 fix
+            val cleanedFull = fullRawText.uppercase()
+                .replace("(?<=\\d)O|O(?=\\d)".toRegex(), "0")
                 .replace("[^A-Z0-9 ]".toRegex(), " ")
                 .replace("\\s+".toRegex(), " ")
 
@@ -265,31 +264,36 @@ class ScanActivity : AppCompatActivity() {
             
             for (med in medicines) {
                 val brand = med.brandName.uppercase()
-                val brandWords = brand.split(" ").filter { it.length > 1 }
-                if (brandWords.isEmpty()) continue
+                var score = 0.0
                 
-                var foundWords = 0
-                for (word in brandWords) {
-                    // Check if word exists as a whole word in the cleaned OCR text
-                    if (cleanedTextForSearch.contains("\\b${Regex.escape(word)}\\b".toRegex())) {
-                        foundWords++
+                if (cleanedFull.contains(brand)) {
+                    score = 10000.0 + brand.length
+                } else {
+                    // Fuzzy word matching
+                    val brandWords = brand.split(" ").filter { it.length > 1 }
+                    var wordScores = 0.0
+                    for (word in brandWords) {
+                        if (cleanedFull.contains(word)) {
+                            wordScores += 1.0
+                        } else {
+                            // Deep fuzzy check for this specific word in the text
+                            val wordsInOCR = cleanedFull.split(" ")
+                            var bestFuzzy = 0.0
+                            for (ocrWord in wordsInOCR) {
+                                if (ocrWord.length < word.length - 1) continue
+                                val distance = levenshtein(word, ocrWord)
+                                val similarity = 1.0 - (distance.toDouble() / word.length.toDouble())
+                                if (similarity > 0.8) bestFuzzy = similarity.coerceAtLeast(bestFuzzy)
+                            }
+                            wordScores += bestFuzzy
+                        }
+                    }
+                    if (wordScores > 0) {
+                        score = (wordScores / brandWords.size) * 1000.0 + brand.length
                     }
                 }
                 
-                if (foundWords == 0) continue
-                
-                val wordMatchRatio = foundWords.toDouble() / brandWords.size
-                
-                // Prioritize full brand matches (e.g. "NEOZEP FORTE") over partial matches ("NEOZEP")
-                var score = wordMatchRatio * 5000.0 + (med.brandName.length * 10.0)
-                
-                // Huge boost for matching all words of a brand
-                if (wordMatchRatio == 1.0) score += 10000.0
-                
-                // Boost if the full brand string is found exactly as a substring
-                if (cleanedTextForSearch.contains(brand)) score += 5000.0
-                
-                if (score > highestScore) {
+                if (score > highestScore && score > 500) { // Confidence threshold
                     highestScore = score
                     bestMatch = med
                 }
@@ -322,7 +326,7 @@ class ScanActivity : AppCompatActivity() {
                     bottomSheet.visibility = View.VISIBLE
                     graphicOverlay.stopAnimation()
                 } else {
-                    Toast.makeText(this@ScanActivity, "No medicine detected.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@ScanActivity, "No medicine detected. Try moving closer.", Toast.LENGTH_LONG).show()
                     resetScanner()
                 }
             }
@@ -330,7 +334,6 @@ class ScanActivity : AppCompatActivity() {
     }
 
     private fun parseDosage(text: String): String {
-        // Fix potential O/0 confusion and standardize
         val normalized = text.uppercase()
             .replace("(?<=\\d)O|O(?=\\d)".toRegex(), "0")
             .replace("\\bI\\b|\\bl\\b".toRegex(), "1")
@@ -338,12 +341,10 @@ class ScanActivity : AppCompatActivity() {
         val dosagePattern = Regex("(\\d+(?:\\.\\d+)?)\\s*(MG|mcg|ml|g|IU)", RegexOption.IGNORE_CASE)
         val matches = dosagePattern.findAll(normalized)
         
-        // Strict deduplication using standardized strings to avoid duplicate dosages from multiple tablets
         val uniqueDosages = linkedSetOf<String>()
         matches.forEach { match ->
             val valueStr = match.groupValues[1].trim()
             val value = valueStr.toDoubleOrNull() ?: return@forEach
-            // Standardize number format: "10.0" -> "10"
             val formattedValue = if (value % 1.0 == 0.0) value.toInt().toString() else "%.1f".format(value)
             
             val unit = match.groupValues[2].uppercase().trim()
@@ -355,11 +356,10 @@ class ScanActivity : AppCompatActivity() {
 
     private fun parseExpiryDate(text: String): Long {
         try {
-            // Aggressive cleaning to handle noisy prints and special symbols like bullets/dots
             val cleaned = text.uppercase()
                 .replace("(?<=\\d)O|O(?=\\d)".toRegex(), "0")
                 .replace("\n", " ")
-                .replace("[^A-Z0-9 ]".toRegex(), " ") // photo shows a bullet/dot, replace with space
+                .replace("[:.-·]".toRegex(), " ")
                 .replace("\\s+".toRegex(), " ")
             
             val monthsRegex = "JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC"
@@ -368,16 +368,16 @@ class ScanActivity : AppCompatActivity() {
                 "JUL" to 6, "AUG" to 7, "SEP" to 8, "OCT" to 9, "NOV" to 10, "DEC" to 11
             )
             
-            // Multiple patterns for robustness - handling both JUN 2026 and numeric versions
             val patterns = listOf(
-                Regex("($monthsRegex)\\s+(20\\d{2}|\\d{2})"), // e.g. JUN 2026
-                Regex("(0[1-9]|1[0-2])\\s+(20\\d{2}|\\d{2})"), // e.g. 06 2026
-                Regex("(20\\d{2}|\\d{2})\\s+($monthsRegex)")  // e.g. 2026 JUN
+                Regex("($monthsRegex)\\s*\\d*\\s*(20\\d{2}|\\d{2})"), // Month Name + optional day + Year
+                Regex("(0[1-9]|1[0-2])\\s*\\d*\\s*(20\\d{2}|\\d{2})"), // Numeric Month + Year
+                Regex("(20\\d{2}|\\d{2})\\s*($monthsRegex)")  // Year + Month Name
             )
             
+            val foundDates = mutableListOf<Long>()
+            
             for (pattern in patterns) {
-                val match = pattern.find(cleaned)
-                if (match != null) {
+                pattern.findAll(cleaned).forEach { match ->
                     val g1 = match.groupValues[1]
                     val g2 = match.groupValues[2]
                     
@@ -386,29 +386,43 @@ class ScanActivity : AppCompatActivity() {
                     
                     if (g1.matches(Regex(monthsRegex))) {
                         month = monthMap[g1] ?: 0
-                        year = g2.toIntOrNull() ?: continue
+                        year = g2.toIntOrNull() ?: return@forEach
                     } else if (g1.matches(Regex("(0[1-9]|1[0-2])"))) {
                         month = g1.toInt() - 1
-                        year = g2.toIntOrNull() ?: continue
-                    } else { // Year first case
-                        year = g1.toIntOrNull() ?: continue
+                        year = g2.toIntOrNull() ?: return@forEach
+                    } else {
+                        year = g1.toIntOrNull() ?: return@forEach
                         month = monthMap[g2] ?: (g2.toIntOrNull()?.minus(1) ?: 0)
                     }
                     
                     val finalYear = if (year < 100) year + 2000 else year
-                    // Basic sanity check for year range
-                    if (finalYear in 2020..2045) {
+                    if (finalYear in 2023..2040) {
                         val calendar = Calendar.getInstance()
                         calendar.set(finalYear, month.coerceIn(0, 11), 1, 0, 0, 0)
                         calendar.set(Calendar.MILLISECOND, 0)
-                        return calendar.timeInMillis
+                        foundDates.add(calendar.timeInMillis)
                     }
                 }
             }
+            // If multiple dates found, pick the one furthest in the future (Expiry)
+            return foundDates.maxOrNull() ?: 0
         } catch (e: Exception) {
-            Log.e("ScanActivity", "Expiry parse error", e)
+            Log.e("ScanActivity", "Expiry error", e)
         }
         return 0
+    }
+
+    private fun levenshtein(s1: String, s2: String): Int {
+        val d = Array(s1.length + 1) { IntArray(s2.length + 1) }
+        for (i in 0..s1.length) d[i][0] = i
+        for (j in 0..s2.length) d[0][j] = j
+        for (i in 1..s1.length) {
+            for (j in 1..s2.length) {
+                val cost = if (s1[i - 1] == s2[j - 1]) 0 else 1
+                d[i][j] = minOf(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost)
+            }
+        }
+        return d[s1.length][s2.length]
     }
 
     private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {

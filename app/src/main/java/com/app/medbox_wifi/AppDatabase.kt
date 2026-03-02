@@ -9,7 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-@Database(entities = [ScannedText::class, Medicine::class, LoggedMedicine::class], version = 13)
+@Database(entities = [ScannedText::class, Medicine::class, LoggedMedicine::class], version = 14)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun scannedTextDao(): ScannedTextDao
     abstract fun medicineDao(): MedicineDao

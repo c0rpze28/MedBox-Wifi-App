@@ -20,15 +20,25 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.android.volley.Request
+import com.android.volley.Response
+import com.android.volley.toolbox.JsonObjectRequest
+import com.android.volley.toolbox.Volley
+import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.*
 
 class MainActivity : AppCompatActivity() {
     private lateinit var database: AppDatabase
     private lateinit var adapter: MedicineAdapter
     private lateinit var rvRecentLogs: RecyclerView
     private lateinit var tvEmptyState: TextView
+    private lateinit var btnConnect: Button
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -56,6 +66,7 @@ class MainActivity : AppCompatActivity() {
         rvRecentLogs = findViewById(R.id.rvRecentLogs)
         tvEmptyState = findViewById(R.id.tvEmptyState)
         val btnScan = findViewById<Button>(R.id.btnScan)
+        btnConnect = findViewById(R.id.btnConnect)
 
         adapter = MedicineAdapter { loggedMed ->
             val intent = Intent(this, EditMedicineActivity::class.java)
@@ -117,6 +128,75 @@ class MainActivity : AppCompatActivity() {
         btnScan.setOnClickListener {
             val intent = Intent(this, ScanActivity::class.java)
             startActivity(intent)
+        }
+
+        btnConnect.setOnClickListener {
+            exportAndSendData()
+        }
+    }
+
+    private fun exportAndSendData() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val allMedicines = database.loggedMedicineDao().getAllLogs()
+            if (allMedicines.isEmpty()) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "No data to send", Toast.LENGTH_SHORT).show()
+                }
+                return@launch
+            }
+
+            val gson = Gson()
+            val jsonString = gson.toJson(allMedicines)
+            
+            withContext(Dispatchers.Main) {
+                sendToEsp32(jsonString)
+            }
+        }
+    }
+
+    private fun sendToEsp32(jsonString: String) {
+        val url = "http://192.168.4.1/update"
+        val queue = Volley.newRequestQueue(this)
+        
+        btnConnect.text = "Syncing with Device..."
+        btnConnect.isEnabled = false
+        btnConnect.alpha = 0.7f
+
+        try {
+            val jsonArray = JSONArray(jsonString)
+            val requestBody = JSONObject()
+            requestBody.put("medicines", jsonArray)
+            
+            // Send current time as Unix timestamp (seconds) and formatted string
+            val now = Calendar.getInstance()
+            requestBody.put("unixTime", now.timeInMillis / 1000)
+            requestBody.put("formattedTime", SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(now.time))
+            requestBody.put("date", SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(now.time))
+
+            val jsonObjectRequest = JsonObjectRequest(
+                Request.Method.POST, url, requestBody,
+                { _ ->
+                    btnConnect.text = "Device Connected & Synced"
+                    btnConnect.isEnabled = true
+                    btnConnect.alpha = 1.0f
+                    btnConnect.setBackgroundColor(Color.parseColor("#2E7D32")) // Darker green
+                    Toast.makeText(this, "Sync Successful!", Toast.LENGTH_SHORT).show()
+                },
+                { _ ->
+                    btnConnect.text = "Connect Device"
+                    btnConnect.isEnabled = true
+                    btnConnect.alpha = 1.0f
+                    btnConnect.setBackgroundColor(Color.parseColor("#00C853")) // Original green
+                    Toast.makeText(this, "Connection Failed: Ensure connected to ESP32 WiFi", Toast.LENGTH_LONG).show()
+                }
+            )
+
+            queue.add(jsonObjectRequest)
+        } catch (e: Exception) {
+            btnConnect.text = "Connect Device"
+            btnConnect.isEnabled = true
+            btnConnect.alpha = 1.0f
+            Toast.makeText(this, "Error preparing data", Toast.LENGTH_SHORT).show()
         }
     }
 

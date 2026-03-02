@@ -31,6 +31,7 @@ class MedicineAdapter(private val onClick: (LoggedMedicine) -> Unit) :
         private val tvIntakeTime: TextView = itemView.findViewById(R.id.tvIntakeTime)
         private val tvQuantity: TextView = itemView.findViewById(R.id.tvQuantity)
         private val tvExpiryDate: TextView = itemView.findViewById(R.id.tvExpiryDate)
+        private val tvPillbox: TextView = itemView.findViewById(R.id.tvPillbox)
         private var currentMedicine: LoggedMedicine? = null
 
         init {
@@ -60,6 +61,13 @@ class MedicineAdapter(private val onClick: (LoggedMedicine) -> Unit) :
                 tvExpiryDate.visibility = View.VISIBLE
             } else {
                 tvExpiryDate.visibility = View.GONE
+            }
+
+            if (medicine.pillboxNumber > 0) {
+                tvPillbox.text = "Box ${medicine.pillboxNumber}"
+                tvPillbox.visibility = View.VISIBLE
+            } else {
+                tvPillbox.visibility = View.GONE
             }
         }
     }

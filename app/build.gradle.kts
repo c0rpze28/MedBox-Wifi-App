@@ -5,16 +5,12 @@ plugins {
 
 android {
     namespace = "com.app.medbox_wifi"
-    compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
-    }
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.app.medbox_wifi"
         minSdk = 30
-        targetSdk = 36
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
@@ -104,6 +100,12 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+
+    // JSON Serialization
+    implementation("com.google.code.gson:gson:2.10.1")
+    
+    // HTTP Client (Volley or OkHttp) - Using Volley for simplicity in this example
+    implementation("com.android.volley:volley:1.2.1")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

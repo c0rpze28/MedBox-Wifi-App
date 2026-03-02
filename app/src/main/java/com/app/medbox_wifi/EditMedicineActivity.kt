@@ -8,6 +8,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.widget.ArrayAdapter
+import android.widget.AutoCompleteTextView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -31,6 +33,7 @@ class EditMedicineActivity : AppCompatActivity() {
     private lateinit var etExpiryDate: TextInputEditText
     private lateinit var etIntakeTime: TextInputEditText
     private lateinit var etNotes: TextInputEditText
+    private lateinit var spinnerPillbox: AutoCompleteTextView
     private lateinit var switchReminder: MaterialSwitch
 
     private val calendar = Calendar.getInstance()
@@ -55,7 +58,13 @@ class EditMedicineActivity : AppCompatActivity() {
         etExpiryDate = findViewById(R.id.etExpiryDate)
         etIntakeTime = findViewById(R.id.etIntakeTime)
         etNotes = findViewById(R.id.etNotes)
+        spinnerPillbox = findViewById(R.id.spinnerPillbox)
         switchReminder = findViewById(R.id.switchReminder)
+
+        // Setup Pillbox Spinner
+        val pillboxOptions = listOf("None", "Pillbox 1", "Pillbox 2", "Pillbox 3", "Pillbox 4", "Pillbox 5", "Pillbox 6")
+        val adapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, pillboxOptions)
+        spinnerPillbox.setAdapter(adapter)
 
         etExpiryDate.setOnClickListener { showDatePicker() }
         etIntakeTime.setOnClickListener { showTimePicker() }
@@ -78,9 +87,16 @@ class EditMedicineActivity : AppCompatActivity() {
                 etNotes.setText(med.notes)
                 switchReminder.isChecked = med.remindersEnabled
 
+                if (med.pillboxNumber in 1..6) {
+                    spinnerPillbox.setText("Pillbox ${med.pillboxNumber}", false)
+                } else {
+                    spinnerPillbox.setText("None", false)
+                }
+
                 if (med.expiryDate > 0) {
                     val sdf = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
                     etExpiryDate.setText(sdf.format(Date(med.expiryDate)))
+                    calendar.timeInMillis = med.expiryDate
                 }
 
                 etIntakeTime.setText(med.intakeTime)
@@ -124,13 +140,21 @@ class EditMedicineActivity : AppCompatActivity() {
     private fun saveChanges() {
         val med = currentMedicine ?: return
         
+        val pillboxText = spinnerPillbox.text.toString()
+        val pillboxNumber = if (pillboxText.startsWith("Pillbox")) {
+            pillboxText.replace("Pillbox ", "").toIntOrNull() ?: 0
+        } else {
+            0
+        }
+
         val updatedMed = med.copy(
             quantity = etQuantity.text.toString().toIntOrNull() ?: 0,
             dosage = etDosage.text.toString(),
             expiryDate = if (etExpiryDate.text.isNullOrEmpty()) 0 else calendar.timeInMillis,
             intakeTime = etIntakeTime.text.toString(),
             remindersEnabled = switchReminder.isChecked,
-            notes = etNotes.text.toString()
+            notes = etNotes.text.toString(),
+            pillboxNumber = pillboxNumber
         )
 
         lifecycleScope.launch(Dispatchers.IO) {

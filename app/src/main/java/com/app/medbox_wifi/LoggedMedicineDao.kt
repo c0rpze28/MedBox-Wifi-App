@@ -16,6 +16,9 @@ interface LoggedMedicineDao {
     @Query("SELECT * FROM logged_medicines ORDER BY timestamp DESC LIMIT 6")
     suspend fun getRecentLogs(): List<LoggedMedicine>
 
+    @Query("SELECT * FROM logged_medicines ORDER BY pillboxNumber ASC")
+    suspend fun getAllLogs(): List<LoggedMedicine>
+
     @Query("SELECT * FROM logged_medicines WHERE id = :id")
     suspend fun getById(id: Int): LoggedMedicine?
 

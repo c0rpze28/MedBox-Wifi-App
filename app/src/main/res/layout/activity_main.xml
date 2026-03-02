@@ -47,9 +47,22 @@
         android:id="@+id/btnScan"
         android:layout_width="match_parent"
         android:layout_height="64dp"
-        android:layout_marginBottom="16dp"
+        android:layout_marginBottom="12dp"
         android:backgroundTint="#4A3799"
         android:text="Scan New Medicine"
+        android:textAllCaps="false"
+        android:textColor="@color/white"
+        android:textSize="18sp"
+        app:cornerRadius="32dp"
+        app:layout_constraintBottom_toTopOf="@+id/btnConnect" />
+
+    <Button
+        android:id="@+id/btnConnect"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:layout_marginBottom="16dp"
+        android:backgroundTint="#00C853"
+        android:text="Connect Device"
         android:textAllCaps="false"
         android:textColor="@color/white"
         android:textSize="18sp"
