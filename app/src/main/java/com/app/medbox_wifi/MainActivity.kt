@@ -20,6 +20,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.android.volley.DefaultRetryPolicy
 import com.android.volley.Request
 import com.android.volley.Response
 import com.android.volley.toolbox.JsonObjectRequest
@@ -167,8 +168,8 @@ class MainActivity : AppCompatActivity() {
             val requestBody = JSONObject()
             requestBody.put("medicines", jsonArray)
             
-            // Send current time as Unix timestamp (seconds) and formatted string
             val now = Calendar.getInstance()
+            // Android uses milliseconds, but ESP32 TimeLib uses seconds
             requestBody.put("unixTime", now.timeInMillis / 1000)
             requestBody.put("formattedTime", SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(now.time))
             requestBody.put("date", SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(now.time))
@@ -179,16 +180,24 @@ class MainActivity : AppCompatActivity() {
                     btnConnect.text = "Device Connected & Synced"
                     btnConnect.isEnabled = true
                     btnConnect.alpha = 1.0f
-                    btnConnect.setBackgroundColor(Color.parseColor("#2E7D32")) // Darker green
+                    btnConnect.setBackgroundColor(Color.parseColor("#2E7D32"))
                     Toast.makeText(this, "Sync Successful!", Toast.LENGTH_SHORT).show()
                 },
                 { _ ->
                     btnConnect.text = "Connect Device"
                     btnConnect.isEnabled = true
                     btnConnect.alpha = 1.0f
-                    btnConnect.setBackgroundColor(Color.parseColor("#00C853")) // Original green
-                    Toast.makeText(this, "Connection Failed: Ensure connected to ESP32 WiFi", Toast.LENGTH_LONG).show()
+                    btnConnect.setBackgroundColor(Color.parseColor("#00C853"))
+                    // Updated Toast to mention the correct SSID: MedBox
+                    Toast.makeText(this, "Sync Failed: Ensure connected to 'MedBox' WiFi", Toast.LENGTH_LONG).show()
                 }
+            )
+
+            // 15s timeout, 0 retries for better stability with ESP32 SoftAP
+            jsonObjectRequest.retryPolicy = DefaultRetryPolicy(
+                15000,
+                0,
+                DefaultRetryPolicy.DEFAULT_BACKOFF_MULT
             )
 
             queue.add(jsonObjectRequest)

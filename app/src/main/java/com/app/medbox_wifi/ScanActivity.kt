@@ -252,8 +252,11 @@ class ScanActivity : AppCompatActivity() {
 
     private fun processOcrResults(blocks: List<TextBlock>, width: Int, height: Int, rotationDegrees: Int) {
         lifecycleScope.launch(Dispatchers.Default) {
+            val allLines = blocks.flatMap { it.lines }.map { it.text.uppercase() }
             val fullRawText = blocks.joinToString("\n") { it.text }
-            val cleanedFull = fullRawText.uppercase()
+            
+            // Comprehensive pre-cleaning for search
+            val cleanedFullText = fullRawText.uppercase()
                 .replace("(?<=\\d)O|O(?=\\d)".toRegex(), "0")
                 .replace("[^A-Z0-9 ]".toRegex(), " ")
                 .replace("\\s+".toRegex(), " ")
@@ -264,43 +267,51 @@ class ScanActivity : AppCompatActivity() {
             
             for (med in medicines) {
                 val brand = med.brandName.uppercase()
+                val generic = med.genericName.uppercase()
+                
                 var score = 0.0
                 
-                if (cleanedFull.contains(brand)) {
-                    score = 10000.0 + brand.length
+                // 1. Brand Match (Weighted heavily)
+                if (cleanedFullText.contains(brand)) {
+                    score += 10000.0 + (brand.length * 10)
                 } else {
-                    // Fuzzy word matching
+                    // Fuzzy brand word check
                     val brandWords = brand.split(" ").filter { it.length > 1 }
-                    var wordScores = 0.0
+                    var wordsFound = 0.0
                     for (word in brandWords) {
-                        if (cleanedFull.contains(word)) {
-                            wordScores += 1.0
+                        if (cleanedFullText.contains("\\b${Regex.escape(word)}\\b".toRegex())) {
+                            wordsFound += 1.0
                         } else {
-                            // Deep fuzzy check for this specific word in the text
-                            val wordsInOCR = cleanedFull.split(" ")
-                            var bestFuzzy = 0.0
-                            for (ocrWord in wordsInOCR) {
-                                if (ocrWord.length < word.length - 1) continue
-                                val distance = levenshtein(word, ocrWord)
-                                val similarity = 1.0 - (distance.toDouble() / word.length.toDouble())
-                                if (similarity > 0.8) bestFuzzy = similarity.coerceAtLeast(bestFuzzy)
-                            }
-                            wordScores += bestFuzzy
+                            // Deep fuzzy search for the word
+                            val similarity = findBestSimilarity(word, cleanedFullText)
+                            if (similarity > 0.85) wordsFound += similarity
                         }
                     }
-                    if (wordScores > 0) {
-                        score = (wordScores / brandWords.size) * 1000.0 + brand.length
+                    if (wordsFound > 0) {
+                        score += (wordsFound / brandWords.size) * 5000.0
                     }
                 }
                 
-                if (score > highestScore && score > 500) { // Confidence threshold
+                // 2. Generic Confirmation (Confirmation boost)
+                val genericWords = generic.split("/", "+", " ").map { it.trim() }.filter { it.length > 3 }
+                var genericsFound = 0
+                for (gWord in genericWords) {
+                    if (cleanedFullText.contains(gWord)) genericsFound++
+                }
+                if (genericsFound > 0) {
+                    score += (genericsFound.toDouble() / genericWords.size) * 2000.0
+                }
+                
+                if (score > highestScore && score > 800) {
                     highestScore = score
                     bestMatch = med
                 }
             }
 
-            detectedExpiryDate = parseExpiryDate(fullRawText)
-            detectedDosage = parseDosage(fullRawText)
+            // Parse metadata from combined lines and blocks
+            val parsingSource = (allLines + listOf(fullRawText)).joinToString("\n")
+            detectedExpiryDate = parseExpiryDate(parsingSource)
+            detectedDosage = parseDosage(parsingSource)
 
             withContext(Dispatchers.Main) {
                 graphicOverlay.clear()
@@ -326,11 +337,23 @@ class ScanActivity : AppCompatActivity() {
                     bottomSheet.visibility = View.VISIBLE
                     graphicOverlay.stopAnimation()
                 } else {
-                    Toast.makeText(this@ScanActivity, "No medicine detected. Try moving closer.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@ScanActivity, "No medicine detected. Try moving closer or adjusting light.", Toast.LENGTH_LONG).show()
                     resetScanner()
                 }
             }
         }
+    }
+
+    private fun findBestSimilarity(word: String, text: String): Double {
+        var best = 0.0
+        val tokens = text.split(" ")
+        for (token in tokens) {
+            if (kotlin.math.abs(token.length - word.length) > 2) continue
+            val dist = levenshtein(word, token)
+            val sim = 1.0 - (dist.toDouble() / word.length.toDouble())
+            if (sim > best) best = sim
+        }
+        return best
     }
 
     private fun parseDosage(text: String): String {
@@ -356,22 +379,27 @@ class ScanActivity : AppCompatActivity() {
 
     private fun parseExpiryDate(text: String): Long {
         try {
+            // Aggressive cleaning to handle noisy prints and dots/bullets on foil packaging
             val cleaned = text.uppercase()
-                .replace("(?<=\\d)O|O(?=\\d)".toRegex(), "0")
+                .replace("(?<=\\d)O|O(?=\\d)".toRegex(), "0") // O -> 0 near digits
                 .replace("\n", " ")
-                .replace("[:.-·]".toRegex(), " ")
-                .replace("\\s+".toRegex(), " ")
+                .replace("[:.-·•]".toRegex(), " ") // Replace noisy separators with space
+                .replace("\\s+".toRegex(), " ")   // Standardize spaces
             
-            val monthsRegex = "JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC"
             val monthMap = mapOf(
                 "JAN" to 0, "FEB" to 1, "MAR" to 2, "APR" to 3, "MAY" to 4, "JUN" to 5,
                 "JUL" to 6, "AUG" to 7, "SEP" to 8, "OCT" to 9, "NOV" to 10, "DEC" to 11
             )
+            val monthsRegex = monthMap.keys.joinToString("|")
             
+            // Multiple patterns for robustness
             val patterns = listOf(
-                Regex("($monthsRegex)\\s*\\d*\\s*(20\\d{2}|\\d{2})"), // Month Name + optional day + Year
-                Regex("(0[1-9]|1[0-2])\\s*\\d*\\s*(20\\d{2}|\\d{2})"), // Numeric Month + Year
-                Regex("(20\\d{2}|\\d{2})\\s*($monthsRegex)")  // Year + Month Name
+                // Handles "JUN 2026", "JUN 26", "DEC 2022" etc.
+                Regex("\\b($monthsRegex)\\s*\\d*\\s*(20\\d{2}|\\d{2})\\b"),
+                // Handles numeric "06 2026"
+                Regex("\\b(0[1-9]|1[0-2])\\s*\\d*\\s*(20\\d{2}|\\d{2})\\b"),
+                // Handles year first "2026 JUN"
+                Regex("\\b(20\\d{2}|\\d{2})\\s*($monthsRegex)\\b")
             )
             
             val foundDates = mutableListOf<Long>()
@@ -382,29 +410,34 @@ class ScanActivity : AppCompatActivity() {
                     val g2 = match.groupValues[2]
                     
                     val month: Int
-                    val year: Int
+                    val yearStr: String
                     
-                    if (g1.matches(Regex(monthsRegex))) {
-                        month = monthMap[g1] ?: 0
-                        year = g2.toIntOrNull() ?: return@forEach
-                    } else if (g1.matches(Regex("(0[1-9]|1[0-2])"))) {
+                    if (monthMap.containsKey(g1)) {
+                        month = monthMap[g1]!!
+                        yearStr = g2
+                    } else if (monthMap.containsKey(g2)) {
+                        month = monthMap[g2]!!
+                        yearStr = g1
+                    } else if (g1.length <= 2 && g1.toIntOrNull() in 1..12) {
                         month = g1.toInt() - 1
-                        year = g2.toIntOrNull() ?: return@forEach
+                        yearStr = g2
                     } else {
-                        year = g1.toIntOrNull() ?: return@forEach
-                        month = monthMap[g2] ?: (g2.toIntOrNull()?.minus(1) ?: 0)
+                        return@forEach
                     }
                     
-                    val finalYear = if (year < 100) year + 2000 else year
-                    if (finalYear in 2023..2040) {
+                    var year = yearStr.toIntOrNull() ?: return@forEach
+                    if (year < 100) year += 2000
+                    
+                    // Accept dates between 2020 and 2045 (handles both current and recently expired meds)
+                    if (year in 2020..2045) {
                         val calendar = Calendar.getInstance()
-                        calendar.set(finalYear, month.coerceIn(0, 11), 1, 0, 0, 0)
+                        calendar.set(year, month, 1, 0, 0, 0)
                         calendar.set(Calendar.MILLISECOND, 0)
                         foundDates.add(calendar.timeInMillis)
                     }
                 }
             }
-            // If multiple dates found, pick the one furthest in the future (Expiry)
+            // Return the date furthest in the future (the true expiry)
             return foundDates.maxOrNull() ?: 0
         } catch (e: Exception) {
             Log.e("ScanActivity", "Expiry error", e)
