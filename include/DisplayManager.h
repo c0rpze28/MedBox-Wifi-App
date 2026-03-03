@@ -9,7 +9,9 @@ class DisplayManager {
 public:
     DisplayManager();
     bool begin();
-    void update(int containerIndex, bool lidOpen, const String& medicineName, const String& expiration);
+    void update(int containerIndex, bool lidOpen, const String& medicineName, 
+                const String& expiration, const String& intakeTime,
+                bool alarming = false, int hour = 0, int minute = 0);
     void showStartupMessage();
 
 private:

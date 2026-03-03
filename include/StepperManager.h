@@ -8,11 +8,15 @@ class StepperManager {
 public:
     StepperManager();
     void begin();
-    void home();
+    void home();                     // initial homing (blocks)
+    void homeSlow();                 // slow homing for after wrap (blocks)
     void moveToNextContainer(int &currentContainer, bool &pendingHome);
-    void update();          // must be called frequently in loop
+    void moveToContainer(int containerIndex, int &currentContainer, bool &pendingHome); // new
+    void update();                    // call frequently
     bool isMoving() const;
     void stopAndDisable();
+    
+    AccelStepper& getStepper();
 
 private:
     AccelStepper stepper;

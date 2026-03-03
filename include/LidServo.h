@@ -1,20 +1,24 @@
 #ifndef LID_SERVO_H
 #define LID_SERVO_H
 
-#include <ServoEasing.h>
+#include <Arduino.h>
 #include "Config.h"
+
+// Forward declaration – no full definition needed here
+class ServoEasing;
 
 class LidServo {
 public:
     LidServo();
+    ~LidServo();                     // needed to delete the pointer
     void begin();
     void open();
     void close();
-    void toggle(bool &lidOpen);  // toggles and returns new state
-    void update();               // must be called frequently in loop
+    void toggle(bool &lidOpen);      // updates lidOpen state
+    void update();                   // must be called regularly
 
 private:
-    ServoEasing servo;
+    ServoEasing* servo;               // pointer to the real servo object
     static const int CLOSED_ANGLE = 80;
     static const int OPEN_ANGLE = 0;
 };

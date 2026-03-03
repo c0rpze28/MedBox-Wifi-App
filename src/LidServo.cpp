@@ -1,20 +1,26 @@
 #include "LidServo.h"
+#include <ServoEasing.hpp>            // full definition only here
 
-LidServo::LidServo() {}
+LidServo::LidServo() : servo(nullptr) {}
+
+LidServo::~LidServo() {
+    if (servo) delete servo;
+}
 
 void LidServo::begin() {
-    servo.attach(SERVO_PIN, 500, 2400);
-    servo.setEasingType(EASE_CUBIC_IN_OUT);
-    servo.setSpeed(60);
-    servo.startEaseTo(CLOSED_ANGLE);
+    servo = new ServoEasing();
+    servo->attach(SERVO_PIN, 500, 2400);
+    servo->setEasingType(EASE_CUBIC_IN_OUT);
+    servo->setSpeed(60);
+    servo->startEaseTo(CLOSED_ANGLE);
 }
 
 void LidServo::open() {
-    servo.startEaseTo(OPEN_ANGLE);
+    if (servo) servo->startEaseTo(OPEN_ANGLE);
 }
 
 void LidServo::close() {
-    servo.startEaseTo(CLOSED_ANGLE);
+    if (servo) servo->startEaseTo(CLOSED_ANGLE);
 }
 
 void LidServo::toggle(bool &lidOpen) {
@@ -28,5 +34,5 @@ void LidServo::toggle(bool &lidOpen) {
 }
 
 void LidServo::update() {
-    servo.update();
+    if (servo) servo->update();
 }

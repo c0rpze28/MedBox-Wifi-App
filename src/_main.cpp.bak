@@ -1,0 +1,283 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <AccelStepper.h>
+#include <ServoEasing.hpp>
+
+// ---------------- OLED ----------------
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// ---------------- STEPPER ----------------
+#define IN1 16
+#define IN2 17
+#define IN3 18
+#define IN4 19
+AccelStepper stepper(AccelStepper::HALF4WIRE, IN1, IN3, IN2, IN4);
+
+// ---------------- INPUTS ----------------
+#define LIMIT_SWITCH 32
+#define NEXT_BUTTON 33
+#define LID_BUTTON 25
+
+// ---------------- SERVO ----------------
+#define SERVO_PIN 26
+ServoEasing lidServo;
+
+// ---------------- SETTINGS ----------------
+const int numberOfContainers = 6;
+const long stepsPerRevolutionTray = 17824;
+const long stepsPerContainer = 2730;
+
+int currentContainer = 0;
+bool lidOpen = false;
+
+bool nextPressed = false;
+bool lidPressed = false;
+
+// ---------------- MEDICINE DATA ----------------
+String medicineNames[numberOfContainers] = {
+  "Paracetamol",
+  "Amoxicillin",
+  "Ibuprofen",
+  "Cetirizine",
+  "Metformin",
+  "Vitamin C"
+};
+
+String expirationDates[numberOfContainers] = {
+  "EXP: 06/2026",
+  "EXP: 11/2025",
+  "EXP: 02/2027",
+  "EXP: 09/2026",
+  "EXP: 01/2028",
+  "EXP: 12/2025"
+};
+
+// -------- Debounce --------
+unsigned long lastLidDebounceTime = 0;
+unsigned long lastNextDebounceTime = 0;
+const unsigned long debounceDelay = 50;
+
+bool lastLidReading = HIGH;
+bool lidButtonState = HIGH;
+
+bool lastNextReading = HIGH;
+bool nextButtonState = HIGH;
+
+long targetPosition = 0;
+bool stepperMoving = false;
+bool pendingHome = false;
+
+// -------- Function Prototypes --------
+void handleNextButton();
+void handleLidButton();
+void homeStepper();
+void moveToNextContainer();
+void toggleLid();
+void updateDisplay();
+
+void setup() {
+
+  Serial.begin(115200);
+  Wire.begin(21, 22);
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    while (1);
+  }
+
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setCursor(0, 20);
+  display.println("Starting...");
+  display.display();
+  delay(1000);
+
+  pinMode(LIMIT_SWITCH, INPUT_PULLUP);
+  pinMode(NEXT_BUTTON, INPUT_PULLUP);
+  pinMode(LID_BUTTON, INPUT_PULLUP);
+
+  stepper.setMaxSpeed(900);
+  stepper.setAcceleration(400);
+
+  lidServo.attach(SERVO_PIN, 500, 2400);
+  lidServo.setEasingType(EASE_CUBIC_IN_OUT);
+  lidServo.setSpeed(60);
+  lidServo.startEaseTo(80);
+
+  homeStepper();
+  updateDisplay();
+}
+
+void loop() {
+
+  stepper.run();
+  lidServo.update();
+
+  if (stepperMoving && stepper.distanceToGo() == 0) {
+
+    stepperMoving = false;
+
+    if (pendingHome) {
+
+      pendingHome = false;
+
+      stepper.setMaxSpeed(300);
+      stepper.setAcceleration(200);
+      stepper.setSpeed(-200);
+
+      while (digitalRead(LIMIT_SWITCH) == HIGH) {
+        stepper.runSpeed();
+        lidServo.update();
+      }
+
+      stepper.stop();
+      stepper.setCurrentPosition(0);
+      targetPosition = 0;
+
+      stepper.setMaxSpeed(900);
+      stepper.setAcceleration(400);
+    }
+
+    stepper.disableOutputs();
+  }
+
+  handleNextButton();
+  handleLidButton();
+}
+
+// ---------------- BUTTON HANDLERS ----------------
+
+void handleNextButton() {
+
+  bool reading = digitalRead(NEXT_BUTTON);
+
+  if (reading != lastNextReading) {
+    lastNextDebounceTime = millis();
+  }
+
+  if ((millis() - lastNextDebounceTime) > debounceDelay) {
+    if (reading != nextButtonState) {
+      nextButtonState = reading;
+      if (nextButtonState == LOW) {
+        moveToNextContainer();
+      }
+    }
+  }
+
+  lastNextReading = reading;
+}
+
+void handleLidButton() {
+
+  bool reading = digitalRead(LID_BUTTON);
+
+  if (reading != lastLidReading) {
+    lastLidDebounceTime = millis();
+  }
+
+  if ((millis() - lastLidDebounceTime) > debounceDelay) {
+    if (reading != lidButtonState) {
+      lidButtonState = reading;
+      if (lidButtonState == LOW) {
+        toggleLid();
+      }
+    }
+  }
+
+  lastLidReading = reading;
+}
+
+// ---------------- STEPPER FUNCTIONS ----------------
+
+void homeStepper() {
+
+  stepper.setSpeed(-300);
+
+  while (digitalRead(LIMIT_SWITCH) == HIGH) {
+    stepper.runSpeed();
+    lidServo.update();
+  }
+
+  stepper.stop();
+  stepper.setCurrentPosition(0);
+  stepper.disableOutputs();
+
+  currentContainer = 0;
+  targetPosition = 0;
+}
+
+void moveToNextContainer() {
+
+  if (currentContainer == numberOfContainers - 1) {
+
+    currentContainer = 0;
+    targetPosition -= stepsPerContainer;
+
+    stepper.enableOutputs();
+    stepper.moveTo(targetPosition);
+    stepperMoving = true;
+
+    pendingHome = true;
+    updateDisplay();
+    return;
+  }
+
+  currentContainer++;
+  targetPosition -= stepsPerContainer;
+
+  stepper.enableOutputs();
+  stepper.moveTo(targetPosition);
+  stepperMoving = true;
+
+  updateDisplay();
+}
+
+// ---------------- LID ----------------
+
+void toggleLid() {
+
+  if (lidOpen) {
+    lidServo.startEaseTo(80);
+    lidOpen = false;
+  } else {
+    lidServo.startEaseTo(0);
+    lidOpen = true;
+  }
+
+  updateDisplay();
+}
+
+// ---------------- DISPLAY ----------------
+
+void updateDisplay() {
+
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+
+  // Container number
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("Container: ");
+  display.println(currentContainer + 1);
+
+  // Medicine Name
+  display.setCursor(0, 15);
+  display.print("Med: ");
+  display.println(medicineNames[currentContainer]);
+
+  // Expiration
+  display.setCursor(0, 28);
+  display.println(expirationDates[currentContainer]);
+
+  // Lid Status
+  display.setCursor(0, 45);
+  if (lidOpen) {
+    display.print("Lid: OPEN");
+  } else {
+    display.print("Lid: CLOSED");
+  }
+
+  display.display();
+}
