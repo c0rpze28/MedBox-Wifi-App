@@ -1,110 +1,100 @@
-#include <Arduino.h>
-#include <WiFi.h>
-#include <WebServer.h>
+#include <Wire.h>
+#include "Config.h"
+#include "MedicineData.h"
+#include "DisplayManager.h"
+#include "LidServo.h"
+#include "StepperManager.h"
+#include "ButtonManager.h"
 
-// Access Point credentials
-const char* ssid = "ESP32-Hotspot";
-const char* password = "12345678";
+// Global objects
+MedicineData medicine;
+DisplayManager display;
+LidServo lidServo;
+StepperManager stepper;
+ButtonManager nextButton(NEXT_BUTTON);
+ButtonManager lidButton(LID_BUTTON);
 
-// LED pin (built-in LED on most ESP32 boards is GPIO2)
-const int ledPin = 2;
-bool ledState = false;
-
-// Create a web server object that listens on port 80
-WebServer server(80);
-
-// HTML page for the control interface
-const char index_html[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>ESP32 Control</title>
-    <style>
-        body { font-family: Arial; text-align: center; margin-top: 50px; }
-        button { padding: 15px 30px; font-size: 18px; margin: 10px; }
-        .on { background-color: #4CAF50; color: white; }
-        .off { background-color: #f44336; color: white; }
-    </style>
-</head>
-<body>
-    <h1>ESP32 Control Panel</h1>
-    <p><a href="/on"><button class="on">LED ON</button></a></p>
-    <p><a href="/off"><button class="off">LED OFF</button></a></p>
-    <p>Status: <span id="status">Loading...</span></p>
-
-    <script>
-        function fetchStatus() {
-            fetch('/status')
-                .then(response => response.text())
-                .then(data => {
-                    document.getElementById('status').innerText = data;
-                });
-        }
-        fetchStatus();
-        setInterval(fetchStatus, 2000);
-    </script>
-</body>
-</html>
-)rawliteral";
-
-// Handle root URL: serve the HTML page
-void handleRoot() {
-  server.send(200, "text/html", index_html);
-}
-
-// Handle /on: turn LED on
-void handleOn() {
-  ledState = true;
-  digitalWrite(ledPin, HIGH);
-  server.send(200, "text/plain", "LED is ON");
-}
-
-// Handle /off: turn LED off
-void handleOff() {
-  ledState = false;
-  digitalWrite(ledPin, LOW);
-  server.send(200, "text/plain", "LED is OFF");
-}
-
-// Handle /status: return current LED state
-void handleStatus() {
-  String state = ledState ? "ON" : "OFF";
-  server.send(200, "text/plain", "LED is " + state);
-}
-
-// Handle 404 - Not found
-void handleNotFound() {
-  server.send(404, "text/plain", "404: Not Found");
-}
+// State variables
+int currentContainer = 0;
+bool lidOpen = false;
+bool pendingHome = false;   // true if we need to home after current move
 
 void setup() {
-  Serial.begin(115200);
-  delay(1000);
-  Serial.println();
+    Serial.begin(115200);
+    Wire.begin(21, 22);
 
-  // Configure LED pin as output
-  pinMode(ledPin, OUTPUT);
-  digitalWrite(ledPin, LOW); // start with LED off
+    if (!display.begin()) {
+        while (1); // hang if display fails
+    }
+    display.showStartupMessage();
+    delay(1000);
 
-  // Set up Access Point
-  WiFi.softAP(ssid, password);
-  IPAddress apIP = WiFi.softAPIP();
-  Serial.print("AP IP address: ");
-  Serial.println(apIP);
+    // Initialize peripherals
+    stepper.begin();
+    lidServo.begin();
+    nextButton.begin();
+    lidButton.begin();
 
-  // Define server routes
-  server.on("/", handleRoot);
-  server.on("/on", handleOn);
-  server.on("/off", handleOff);
-  server.on("/status", handleStatus);
-  server.onNotFound(handleNotFound);
-
-  // Start server
-  server.begin();
-  Serial.println("HTTP server started");
+    // Home the stepper
+    stepper.home();
+    updateDisplay();
 }
 
 void loop() {
-  server.handleClient(); // handle incoming client requests
+    // Update non-blocking components
+    stepper.update();
+    lidServo.update();
+    nextButton.update();
+    lidButton.update();
+
+    // Handle button presses
+    if (nextButton.wasPressed()) {
+        moveToNextContainer();
+    }
+    if (lidButton.wasPressed()) {
+        toggleLid();
+    }
+
+    // Handle homing after wrap-around move
+    if (pendingHome && !stepper.isMoving()) {
+        performHomeAfterWrap();
+    }
+}
+
+void moveToNextContainer() {
+    stepper.moveToNextContainer(currentContainer, pendingHome);
+    updateDisplay();
+}
+
+void toggleLid() {
+    lidServo.toggle(lidOpen);
+    updateDisplay();
+}
+
+void performHomeAfterWrap() {
+    // Disable stepper outputs if still enabled
+    stepper.stopAndDisable();
+
+    // Slow homing sequence
+    stepper.begin();  // re-initialize speeds (optional, but we need to set slow speed)
+    // We'll home manually here
+    while (digitalRead(LIMIT_SWITCH) == HIGH) {
+        // Use AccelStepper's runSpeed for continuous motion
+        stepper.setSpeed(-200);
+        stepper.runSpeed();
+        lidServo.update();  // keep servo updating
+    }
+    stepper.stop();
+    stepper.setCurrentPosition(0);
+    pendingHome = false;
+    stepper.begin();  // restore normal speeds
+    stepper.disableOutputs();
+
+    updateDisplay();
+}
+
+void updateDisplay() {
+    display.update(currentContainer, lidOpen,
+                   medicine.getName(currentContainer),
+                   medicine.getExpiration(currentContainer));
 }
