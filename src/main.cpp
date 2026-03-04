@@ -19,7 +19,7 @@ ButtonManager nextButton(NEXT_BUTTON);
 ButtonManager lidButton(LID_BUTTON);
 BuzzerManager buzzer(BUZZER_PIN);
 WiFiManager wifi(WIFI_AP_SSID, WIFI_AP_PASSWORD);
-
+#define TIMEZONE_OFFSET 28800  // 8 hours in seconds (UTC+8)
 // State variables
 int currentContainer = 0;
 bool lidOpen = false;
@@ -188,9 +188,14 @@ void updateTime() {
     static unsigned long lastSecond = 0;
     if (millis() - lastSecond >= 1000) {
         lastSecond = millis();
-        adjustTime(1);
-        currentHour = hour();
-        currentMinute = minute();
+        adjustTime(1);                     // advance one second (UTC)
+        // Compute local time (UTC+8)
+        time_t utc = now();                 // get current UTC time_t
+        time_t local = utc + TIMEZONE_OFFSET;
+        // Use gmtime to break down the local time (since local + offset is still a UTC timestamp, but we treat it as local)
+        struct tm* tm_local = gmtime(&local);
+        currentHour = tm_local->tm_hour;
+        currentMinute = tm_local->tm_min;
     }
 }
 
@@ -249,11 +254,10 @@ void onDataReceived(const JsonDocument& doc) {
     Serial.println("Processing received data...");
 
     if (doc["unixTime"].is<long>()) {
-        long unixTime = doc["unixTime"];
-        unixTime += 8 * 3600;          // UTC+8
-        setTime(unixTime);
+        long unixTime = doc["unixTime"];          // UTC seconds
+        setTime(unixTime);                         // store as UTC
         saveTime(unixTime);
-        Serial.printf("Time set to (UTC+8): %s", asctime(localtime(&unixTime)));
+        Serial.printf("Time set to UTC: %s", asctime(gmtime(&unixTime)));
     }
 
     saveMedicineData(doc);
