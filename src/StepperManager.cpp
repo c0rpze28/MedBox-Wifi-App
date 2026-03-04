@@ -96,3 +96,7 @@ void StepperManager::moveToContainer(int containerIndex, int &currentContainer, 
 
     currentContainer = containerIndex; // update immediately for display
 }
+
+void StepperManager::resetTargetPosition() {
+    targetPosition = 0;
+}

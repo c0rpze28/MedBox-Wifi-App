@@ -15,6 +15,7 @@ public:
     void update();                    // call frequently
     bool isMoving() const;
     void stopAndDisable();
+    void resetTargetPosition();
     
     AccelStepper& getStepper();
 

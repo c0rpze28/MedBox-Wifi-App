@@ -220,6 +220,8 @@ void performHomeAfterWrap() {
     s.stop();
     s.setCurrentPosition(0);
     pendingHome = false;
+    stepper.resetTargetPosition();   // <-- new: reset stored target
+    currentContainer = 0;             // <-- important: update container index
     stepper.begin();
     s.disableOutputs();
     updateDisplay();
