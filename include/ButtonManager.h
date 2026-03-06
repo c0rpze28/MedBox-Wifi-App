@@ -10,6 +10,8 @@ public:
     void begin();
     void update();  // call in loop
     bool wasPressed(); // returns true if button was pressed since last call
+    bool isPressed();           // returns current button state
+    unsigned long getPressDuration(); // how long button has been held
 
 private:
     uint8_t pin;

@@ -75,3 +75,13 @@ void DisplayManager::update(int containerIndex, bool lidOpen, const String& medi
 
     display.display();
 }
+
+void DisplayManager::showMessage(const String& message, int durationMs) {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor(0, 20);
+    display.println(message);
+    display.display();
+    delay(durationMs);
+    // Restore normal display after delay
+}

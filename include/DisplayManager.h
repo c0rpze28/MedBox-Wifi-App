@@ -13,6 +13,7 @@ public:
                 const String& expiration, const String& intakeTime,
                 bool alarming = false, int hour = 0, int minute = 0);
     void showStartupMessage();
+    void showMessage(const String& message, int durationMs);
 
 private:
     Adafruit_SSD1306 display;

@@ -31,3 +31,14 @@ bool ButtonManager::wasPressed() {
     }
     return false;
 }
+
+bool ButtonManager::isPressed() {
+    return state == LOW;
+}
+
+unsigned long ButtonManager::getPressDuration() {
+    if (state == LOW) {
+        return millis() - (lastDebounceTime + debounceDelay);
+    }
+    return 0;
+}

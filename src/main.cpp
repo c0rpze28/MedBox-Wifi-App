@@ -9,6 +9,7 @@
 #include "ButtonManager.h"
 #include "BuzzerManager.h"
 #include "WiFiManager.h"
+#include "RTCManager.h"
 
 // Global objects
 MedicineStorage medicineStorage;
@@ -19,20 +20,24 @@ ButtonManager nextButton(NEXT_BUTTON);
 ButtonManager lidButton(LID_BUTTON);
 BuzzerManager buzzer(BUZZER_PIN);
 WiFiManager wifi(WIFI_AP_SSID, WIFI_AP_PASSWORD);
-#define TIMEZONE_OFFSET 28800  // 8 hours in seconds (UTC+8)
+RTCManager rtc;   // hardware RTC
+
 // State variables
 int currentContainer = 0;
 bool lidOpen = false;
 bool pendingHome = false;
 bool alarmAcknowledged = false;
-bool autoMovePending = false;      // true when auto‑move started, cleared after stepper done and lid opened
+bool autoMovePending = false;      // true when auto‑move started, cleared after lid opened
 bool lidAutoOpened = false;        // true after lid opened automatically (waiting for user to close)
 bool pendingAutoHome = false;      // true when we need to home after lid close
 
-// Time tracking
-unsigned long lastTimeUpdate = 0;
+// Time (local, updated from RTC)
 int currentHour = 0;
 int currentMinute = 0;
+
+// Button long‑press detection for WiFi wake
+unsigned long nextButtonPressStart = 0;
+bool nextButtonPressed = false;
 
 // Function prototypes
 void updateDisplay();
@@ -40,53 +45,59 @@ void moveToNextContainer();
 void toggleLid();
 void acknowledgeAlarm();
 void performHomeAfterWrap();
-void updateTime();
 void onDataReceived(const JsonDocument& doc);
 void saveMedicineData(const JsonDocument& doc);
 void loadMedicineData();
-void saveTime(time_t t);
-time_t loadTime();
 String formatExpiry(uint64_t timestamp_ms);
 
 void setup() {
     Serial.begin(115200);
     Wire.begin(21, 22);
 
+    // Initialize LittleFS (for medicine storage)
     if (!LittleFS.begin(true)) {
         Serial.println("LittleFS mount failed");
     }
 
+    // Initialize display
     if (!display.begin()) {
         while (1);
     }
     display.showStartupMessage();
     delay(1000);
 
+    // Load saved medicine data
     loadMedicineData();
-    time_t savedTime = loadTime();
-    if (savedTime > 0) {
-        setTime(savedTime);
-        Serial.println("Restored saved time");
-    } else {
-        setTime(8, 0, 0, 1, 1, 2024);
-    }
-    currentHour = hour();
-    currentMinute = minute();
 
+    // Initialize RTC
+    rtc.begin();
+    if (!rtc.isRunning()) {
+        Serial.println("RTC not running – set default time (will be overwritten on first sync)");
+        // Optionally set a fallback time here, but we'll rely on phone sync
+    }
+
+    // Initialize peripherals
     stepper.begin();
     lidServo.begin();
     nextButton.begin();
     lidButton.begin();
     buzzer.begin();
     buzzer.setMedicineStorage(&medicineStorage);
-    wifi.begin();
-    wifi.setDataCallback(onDataReceived);
 
+    // WiFi with timeout (15 min) and wake on button
+    wifi.setTimeoutMinutes(15);
+    wifi.setDataCallback(onDataReceived);
+    wifi.begin();   // starts AP
+
+    // Home the stepper (finds container 0)
     stepper.home();
+
+    // Initial display
     updateDisplay();
 }
 
 void loop() {
+    // Update non‑blocking modules
     stepper.update();
     lidServo.update();
     nextButton.update();
@@ -94,17 +105,20 @@ void loop() {
     buzzer.update();
     wifi.loop();
 
-    // Time update every second
-    if (millis() - lastTimeUpdate >= 1000) {
-        lastTimeUpdate = millis();
-        updateTime();
-        updateDisplay();
+    // ---- Read current time from RTC once per second ----
+    static unsigned long lastRtcRead = 0;
+    if (millis() - lastRtcRead >= 1000) {
+        lastRtcRead = millis();
+        currentHour = rtc.getHour();
+        currentMinute = rtc.getMinute();
+        updateDisplay();   // refresh display with new time
 
+        // Check for scheduled alarms (buzzer)
         if (!alarmAcknowledged) {
             buzzer.checkScheduledAlarm(currentHour, currentMinute);
         }
 
-        // Check for automatic rotation once per minute
+        // Check for automatic rotation to due medicine (once per minute)
         static int lastAutoCheckMinute = -1;
         if (currentMinute != lastAutoCheckMinute) {
             lastAutoCheckMinute = currentMinute;
@@ -122,7 +136,7 @@ void loop() {
         }
     }
 
-    // After auto‑move completes (stepper stopped), open lid
+    // ---- After auto‑move completes, open the lid ----
     if (autoMovePending && !stepper.isMoving() && !pendingHome) {
         autoMovePending = false;        // movement done
         lidServo.open();
@@ -131,17 +145,38 @@ void loop() {
         updateDisplay();
     }
 
-    // Button: Next
+    // ---- Button: Next (manual move + long press for WiFi wake) ----
     if (nextButton.wasPressed()) {
-        // Manual move cancels any pending auto‑move
+        // Short press: manual move
         if (lidAutoOpened) {
             lidAutoOpened = false;       // user manually moved, so no auto‑home needed
         }
         stepper.moveToNextContainer(currentContainer, pendingHome);
         updateDisplay();
+
+        // Reset WiFi timeout (client activity)
+        wifi.handleClientActivity();
     }
 
-    // Button: Lid
+    // Long press detection for WiFi wake
+    if (nextButton.isPressed()) {
+        if (!nextButtonPressed) {
+            nextButtonPressed = true;
+            nextButtonPressStart = millis();
+        } else if (millis() - nextButtonPressStart >= 5000) {
+            // 5 seconds long press – wake WiFi if it's off
+            if (!wifi.isAPActive()) {
+                Serial.println("Long press: waking WiFi");
+                wifi.startAP();
+                display.showMessage("WiFi ON", 1500); // optional visual feedback
+            }
+            nextButtonPressed = false;   // prevent repeated triggering
+        }
+    } else {
+        nextButtonPressed = false;       // button released
+    }
+
+    // ---- Button: Lid ----
     if (lidButton.wasPressed()) {
         toggleLid();
         if (buzzer.isAlarming()) {
@@ -150,16 +185,19 @@ void loop() {
         // If lid was closed and it was previously opened automatically, schedule homing
         if (!lidOpen && lidAutoOpened) {
             pendingAutoHome = true;
-            lidAutoOpened = false;       // reset flag
+            lidAutoOpened = false;
         }
+
+        // Reset WiFi timeout (client activity)
+        wifi.handleClientActivity();
     }
 
-    // Homing after wrap‑around (from next button when at last container)
+    // ---- Homing after wrap‑around (from next button when at last container) ----
     if (pendingHome && !stepper.isMoving()) {
         performHomeAfterWrap();
     }
 
-    // Homing after auto‑move and lid close
+    // ---- Homing after auto‑move and lid close ----
     if (pendingAutoHome && !stepper.isMoving() && !pendingHome) {
         AccelStepper& s = stepper.getStepper();
         s.setSpeed(-200);
@@ -171,12 +209,13 @@ void loop() {
         s.stop();
         s.setCurrentPosition(0);
         pendingAutoHome = false;
+        stepper.resetTargetPosition();   // reset stored target in StepperManager
         stepper.begin();
         s.disableOutputs();
         updateDisplay();
     }
 
-    // Update display on alarm state change
+    // ---- Update display on alarm state change ----
     static bool lastAlarmState = false;
     if (buzzer.isAlarming() != lastAlarmState) {
         lastAlarmState = buzzer.isAlarming();
@@ -184,20 +223,7 @@ void loop() {
     }
 }
 
-void updateTime() {
-    static unsigned long lastSecond = 0;
-    if (millis() - lastSecond >= 1000) {
-        lastSecond = millis();
-        adjustTime(1);                     // advance one second (UTC)
-        // Compute local time (UTC+8)
-        time_t utc = now();                 // get current UTC time_t
-        time_t local = utc + TIMEZONE_OFFSET;
-        // Use gmtime to break down the local time (since local + offset is still a UTC timestamp, but we treat it as local)
-        struct tm* tm_local = gmtime(&local);
-        currentHour = tm_local->tm_hour;
-        currentMinute = tm_local->tm_min;
-    }
-}
+// ---------- Helper functions ----------
 
 void moveToNextContainer() {
     stepper.moveToNextContainer(currentContainer, pendingHome);
@@ -225,8 +251,7 @@ void performHomeAfterWrap() {
     s.stop();
     s.setCurrentPosition(0);
     pendingHome = false;
-    stepper.resetTargetPosition();   // <-- new: reset stored target
-    currentContainer = 0;             // <-- important: update container index
+    stepper.resetTargetPosition();
     stepper.begin();
     s.disableOutputs();
     updateDisplay();
@@ -249,19 +274,23 @@ String formatExpiry(uint64_t timestamp_ms) {
     return String(buffer);
 }
 
-// ---------- WiFi Callback ----------
+// ---------- WiFi Data Callback ----------
 void onDataReceived(const JsonDocument& doc) {
     Serial.println("Processing received data...");
 
+    // Update RTC time (phone sends UTC seconds)
     if (doc["unixTime"].is<long>()) {
         long unixTime = doc["unixTime"];          // UTC seconds
-        setTime(unixTime);                         // store as UTC
-        saveTime(unixTime);
-        Serial.printf("Time set to UTC: %s", asctime(gmtime(&unixTime)));
+        // Convert to local time (UTC+8) before storing in RTC
+        unixTime += 8 * 3600;
+        rtc.setUnixTime(unixTime);
+        Serial.printf("RTC set to local time (UTC+8): %s", asctime(localtime(&unixTime)));
     }
 
+    // Save the incoming data to flash
     saveMedicineData(doc);
 
+    // Update in‑memory storage
     medicineStorage.clear();
     JsonArrayConst medicines = doc["medicines"].as<JsonArrayConst>();
     for (JsonObjectConst obj : medicines) {
@@ -283,7 +312,7 @@ void onDataReceived(const JsonDocument& doc) {
     updateDisplay();
 }
 
-// ---------- Persistent Storage ----------
+// ---------- Persistent Storage Functions ----------
 void saveMedicineData(const JsonDocument& doc) {
     File file = LittleFS.open("/medicines.json", FILE_WRITE);
     if (!file) {
@@ -338,24 +367,4 @@ void loadMedicineData() {
     }
     Serial.println("Loaded saved medicine data");
     medicineStorage.printAll();
-}
-
-void saveTime(time_t t) {
-    File file = LittleFS.open("/time.txt", FILE_WRITE);
-    if (!file) {
-        Serial.println("Failed to open time.txt for writing");
-        return;
-    }
-    file.println(t);
-    file.close();
-    Serial.println("Time saved");
-}
-
-time_t loadTime() {
-    if (!LittleFS.exists("/time.txt")) return 0;
-    File file = LittleFS.open("/time.txt", FILE_READ);
-    if (!file) return 0;
-    String content = file.readStringUntil('\n');
-    file.close();
-    return content.toInt();
 }
