@@ -1,11 +1,17 @@
 package com.app.medbox_wifi
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.*
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.TextView
@@ -47,6 +53,14 @@ class MainActivity : AppCompatActivity() {
         val notifGranted = permissions[Manifest.permission.POST_NOTIFICATIONS] ?: false
         if (!notifGranted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             Toast.makeText(this, "Notifications are disabled. You won't receive medicine reminders.", Toast.LENGTH_LONG).show()
+        }
+        
+        val nearbyGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions[Manifest.permission.NEARBY_WIFI_DEVICES] ?: false
+        } else true
+        
+        if (!nearbyGranted) {
+            Toast.makeText(this, "Nearby devices permission is required for ESP32 sync.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -150,18 +164,48 @@ class MainActivity : AppCompatActivity() {
             val jsonString = gson.toJson(allMedicines)
             
             withContext(Dispatchers.Main) {
-                sendToEsp32(jsonString)
+                // For Android 13+, we might need to bind to the WiFi network specifically
+                // since it doesn't have internet access.
+                bindAndSendToEsp32(jsonString)
             }
         }
+    }
+
+    private fun bindAndSendToEsp32(jsonString: String) {
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val networkRequest = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .build()
+
+        btnConnect.text = "Searching for MedBox..."
+        btnConnect.isEnabled = false
+
+        connectivityManager.requestNetwork(networkRequest, object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                // Bind the process to this network so Volley uses it
+                connectivityManager.bindProcessToNetwork(network)
+                runOnUiThread {
+                    sendToEsp32(jsonString)
+                }
+                // Unbind after a delay or after request finishes to return to normal
+            }
+
+            override fun onUnavailable() {
+                runOnUiThread {
+                    btnConnect.text = "Connect Device"
+                    btnConnect.isEnabled = true
+                    Toast.makeText(this@MainActivity, "MedBox WiFi not found", Toast.LENGTH_LONG).show()
+                }
+            }
+        })
     }
 
     private fun sendToEsp32(jsonString: String) {
         val url = "http://192.168.4.1/update"
         val queue = Volley.newRequestQueue(this)
         
-        btnConnect.text = "Syncing with Device..."
+        btnConnect.text = "Syncing..."
         btnConnect.isEnabled = false
-        btnConnect.alpha = 0.7f
 
         try {
             val jsonArray = JSONArray(jsonString)
@@ -169,7 +213,6 @@ class MainActivity : AppCompatActivity() {
             requestBody.put("medicines", jsonArray)
             
             val now = Calendar.getInstance()
-            // Android uses milliseconds, but ESP32 TimeLib uses seconds
             requestBody.put("unixTime", now.timeInMillis / 1000)
             requestBody.put("formattedTime", SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(now.time))
             requestBody.put("date", SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(now.time))
@@ -177,35 +220,31 @@ class MainActivity : AppCompatActivity() {
             val jsonObjectRequest = JsonObjectRequest(
                 Request.Method.POST, url, requestBody,
                 { _ ->
-                    btnConnect.text = "Device Connected & Synced"
+                    btnConnect.text = "Synced"
                     btnConnect.isEnabled = true
-                    btnConnect.alpha = 1.0f
                     btnConnect.setBackgroundColor(Color.parseColor("#2E7D32"))
                     Toast.makeText(this, "Sync Successful!", Toast.LENGTH_SHORT).show()
+                    // Release the network binding
+                    val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                    cm.bindProcessToNetwork(null)
                 },
-                { _ ->
+                { error ->
                     btnConnect.text = "Connect Device"
                     btnConnect.isEnabled = true
-                    btnConnect.alpha = 1.0f
-                    btnConnect.setBackgroundColor(Color.parseColor("#00C853"))
-                    // Updated Toast to mention the correct SSID: MedBox
-                    Toast.makeText(this, "Sync Failed: Ensure connected to 'MedBox' WiFi", Toast.LENGTH_LONG).show()
+                    Log.e("Sync", "Error: ${error.message}")
+                    Toast.makeText(this, "Sync Failed. Check 'MedBox' connection.", Toast.LENGTH_LONG).show()
+                    val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                    cm.bindProcessToNetwork(null)
                 }
             )
 
-            // 15s timeout, 0 retries for better stability with ESP32 SoftAP
-            jsonObjectRequest.retryPolicy = DefaultRetryPolicy(
-                15000,
-                0,
-                DefaultRetryPolicy.DEFAULT_BACKOFF_MULT
-            )
-
+            jsonObjectRequest.retryPolicy = DefaultRetryPolicy(20000, 0, 1f)
             queue.add(jsonObjectRequest)
         } catch (e: Exception) {
             btnConnect.text = "Connect Device"
             btnConnect.isEnabled = true
-            btnConnect.alpha = 1.0f
-            Toast.makeText(this, "Error preparing data", Toast.LENGTH_SHORT).show()
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            cm.bindProcessToNetwork(null)
         }
     }
 
@@ -214,6 +253,9 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED) {
+                permissions.add(Manifest.permission.NEARBY_WIFI_DEVICES)
             }
         }
         if (permissions.isNotEmpty()) {
