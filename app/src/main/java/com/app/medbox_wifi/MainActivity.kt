@@ -54,14 +54,6 @@ class MainActivity : AppCompatActivity() {
         if (!notifGranted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             Toast.makeText(this, "Notifications are disabled. You won't receive medicine reminders.", Toast.LENGTH_LONG).show()
         }
-        
-        val nearbyGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions[Manifest.permission.NEARBY_WIFI_DEVICES] ?: false
-        } else true
-        
-        if (!nearbyGranted) {
-            Toast.makeText(this, "Nearby devices permission is required for ESP32 sync.", Toast.LENGTH_LONG).show()
-        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -164,9 +156,11 @@ class MainActivity : AppCompatActivity() {
             val jsonString = gson.toJson(allMedicines)
             
             withContext(Dispatchers.Main) {
-                // For Android 13+, we might need to bind to the WiFi network specifically
-                // since it doesn't have internet access.
-                bindAndSendToEsp32(jsonString)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    bindAndSendToEsp32(jsonString)
+                } else {
+                    sendToEsp32(jsonString)
+                }
             }
         }
     }
@@ -180,24 +174,30 @@ class MainActivity : AppCompatActivity() {
         btnConnect.text = "Searching for MedBox..."
         btnConnect.isEnabled = false
 
-        connectivityManager.requestNetwork(networkRequest, object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                // Bind the process to this network so Volley uses it
-                connectivityManager.bindProcessToNetwork(network)
-                runOnUiThread {
-                    sendToEsp32(jsonString)
+        try {
+            connectivityManager.requestNetwork(networkRequest, object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    connectivityManager.bindProcessToNetwork(network)
+                    runOnUiThread {
+                        sendToEsp32(jsonString)
+                    }
                 }
-                // Unbind after a delay or after request finishes to return to normal
-            }
 
-            override fun onUnavailable() {
-                runOnUiThread {
-                    btnConnect.text = "Connect Device"
-                    btnConnect.isEnabled = true
-                    Toast.makeText(this@MainActivity, "MedBox WiFi not found", Toast.LENGTH_LONG).show()
+                override fun onUnavailable() {
+                    runOnUiThread {
+                        btnConnect.text = "Connect Device"
+                        btnConnect.isEnabled = true
+                        Toast.makeText(this@MainActivity, "MedBox WiFi not found", Toast.LENGTH_LONG).show()
+                    }
                 }
+            })
+        } catch (e: Exception) {
+            runOnUiThread {
+                btnConnect.text = "Connect Device"
+                btnConnect.isEnabled = true
+                sendToEsp32(jsonString) // Fallback
             }
-        })
+        }
     }
 
     private fun sendToEsp32(jsonString: String) {
@@ -224,7 +224,6 @@ class MainActivity : AppCompatActivity() {
                     btnConnect.isEnabled = true
                     btnConnect.setBackgroundColor(Color.parseColor("#2E7D32"))
                     Toast.makeText(this, "Sync Successful!", Toast.LENGTH_SHORT).show()
-                    // Release the network binding
                     val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                     cm.bindProcessToNetwork(null)
                 },
@@ -256,6 +255,10 @@ class MainActivity : AppCompatActivity() {
             }
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED) {
                 permissions.add(Manifest.permission.NEARBY_WIFI_DEVICES)
+            }
+        } else {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
             }
         }
         if (permissions.isNotEmpty()) {

@@ -6,4 +6,14 @@
     <color name="pharmacy_green">#00A86B</color>
     <color name="pharmacy_green_dark">#007F47</color>
     <color name="pharmacy_green_light">#E6F6F0</color>
+
+    <!-- Semantic Colors -->
+    <color name="brand_primary">#4A3799</color>
+    <color name="brand_secondary">#777777</color>
+
+    <color name="background_light">#F3EFFF</color>
+    <color name="background_dark">#121212</color>
+
+    <color name="surface_light">#FFFFFF</color>
+    <color name="surface_dark">#1E1E1E</color>
 </resources>
