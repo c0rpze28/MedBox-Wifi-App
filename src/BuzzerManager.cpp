@@ -8,7 +8,7 @@ BuzzerManager::BuzzerManager(uint8_t pin)
 
 void BuzzerManager::begin() {
     pinMode(pin, OUTPUT);
-    digitalWrite(pin, LOW);
+    digitalWrite(pin, LOW);   // ensure pin is low at start
 }
 
 void BuzzerManager::setMedicineStorage(MedicineStorage* storage) {
@@ -27,7 +27,8 @@ void BuzzerManager::triggerAlarm(int durationSeconds) {
 void BuzzerManager::stopAlarm() {
     alarming = false;
     toneState = TONE_IDLE;
-    toneOff();
+    noTone(pin);              // stop any PWM
+    digitalWrite(pin, LOW);   // force pin low
 }
 
 bool BuzzerManager::isAlarming() const {
@@ -36,7 +37,6 @@ bool BuzzerManager::isAlarming() const {
 
 void BuzzerManager::update() {
     if (alarming) {
-        // Check if total alarm duration has elapsed
         if (millis() - alarmStartTime >= alarmDuration * 1000UL) {
             stopAlarm();
             return;
@@ -55,11 +55,11 @@ void BuzzerManager::checkScheduledAlarm(int currentHour, int currentMinute) {
     }
 }
 
-// ----- Non‑blocking pattern control -----
+// ----- Non‑blocking tone pattern -----
 void BuzzerManager::startPattern() {
     toneState = TONE_BEEP1;
     lastToneChange = millis();
-    toneOn(880); // A5
+    toneOn(880); // start first beep
 }
 
 void BuzzerManager::updatePattern() {
@@ -87,8 +87,7 @@ void BuzzerManager::updatePattern() {
             }
             break;
         case TONE_PAUSE2:
-            if (now - lastToneChange >= 1000) { // longer pause between cycles
-                // Restart pattern
+            if (now - lastToneChange >= 1000) {
                 toneState = TONE_BEEP1;
                 lastToneChange = now;
                 toneOn(880);
@@ -100,13 +99,10 @@ void BuzzerManager::updatePattern() {
 }
 
 void BuzzerManager::toneOn(int frequency) {
-    // Use ledcWriteTone or analogWrite? On ESP32 we can use ledc.
-    // For simplicity, using the tone() function if available (ESP32 has it).
-    // If not, implement using PWM. We'll assume tone() works.
     ::tone(pin, frequency);
 }
 
 void BuzzerManager::toneOff() {
     ::noTone(pin);
-    digitalWrite(pin, LOW);
+    digitalWrite(pin, LOW);   // ensure pin is low after tone stops
 }

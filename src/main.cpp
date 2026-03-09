@@ -20,16 +20,15 @@ ButtonManager nextButton(NEXT_BUTTON);
 ButtonManager lidButton(LID_BUTTON);
 BuzzerManager buzzer(BUZZER_PIN);
 WiFiManager wifi(WIFI_AP_SSID, WIFI_AP_PASSWORD);
-RTCManager rtc;   // hardware RTC
+RTCManager rtc;
 
 // State variables
 int currentContainer = 0;
 bool lidOpen = false;
-bool pendingHome = false;
+bool pendingHome = false;          // true after wrap‑around (needs homing)
 bool alarmAcknowledged = false;
-bool autoMovePending = false;      // true when auto‑move started, cleared after lid opened
-bool lidAutoOpened = false;        // true after lid opened automatically (waiting for user to close)
-bool pendingAutoHome = false;      // true when we need to home after lid close
+bool autoMovePending = false;      // true during auto‑move to due container
+bool lidAutoOpened = false;        // true after lid opened automatically
 
 // Time (local, updated from RTC)
 int currentHour = 0;
@@ -54,29 +53,23 @@ void setup() {
     Serial.begin(115200);
     Wire.begin(21, 22);
 
-    // Initialize LittleFS (for medicine storage)
     if (!LittleFS.begin(true)) {
         Serial.println("LittleFS mount failed");
     }
 
-    // Initialize display
     if (!display.begin()) {
         while (1);
     }
     display.showStartupMessage();
     delay(1000);
 
-    // Load saved medicine data
     loadMedicineData();
 
-    // Initialize RTC
     rtc.begin();
     if (!rtc.isRunning()) {
-        Serial.println("RTC not running – set default time (will be overwritten on first sync)");
-        // Optionally set a fallback time here, but we'll rely on phone sync
+        Serial.println("RTC not running – will set on phone sync");
     }
 
-    // Initialize peripherals
     stepper.begin();
     lidServo.begin();
     nextButton.begin();
@@ -84,15 +77,11 @@ void setup() {
     buzzer.begin();
     buzzer.setMedicineStorage(&medicineStorage);
 
-    // WiFi with timeout (15 min) and wake on button
     wifi.setTimeoutMinutes(15);
     wifi.setDataCallback(onDataReceived);
-    wifi.begin();   // starts AP
+    wifi.begin();
 
-    // Home the stepper (finds container 0)
     stepper.home();
-
-    // Initial display
     updateDisplay();
 }
 
@@ -111,9 +100,8 @@ void loop() {
         lastRtcRead = millis();
         currentHour = rtc.getHour();
         currentMinute = rtc.getMinute();
-        updateDisplay();   // refresh display with new time
+        updateDisplay();
 
-        // Check for scheduled alarms (buzzer)
         if (!alarmAcknowledged) {
             buzzer.checkScheduledAlarm(currentHour, currentMinute);
         }
@@ -122,13 +110,13 @@ void loop() {
         static int lastAutoCheckMinute = -1;
         if (currentMinute != lastAutoCheckMinute) {
             lastAutoCheckMinute = currentMinute;
-            if (!stepper.isMoving() && !pendingHome && !pendingAutoHome) {
+            if (!stepper.isMoving() && !pendingHome) {
                 int duePillbox = medicineStorage.getDuePillbox(currentHour, currentMinute);
                 if (duePillbox != 0) {
                     int targetContainer = duePillbox - 1;
                     if (targetContainer != currentContainer) {
                         stepper.moveToContainer(targetContainer, currentContainer, pendingHome);
-                        autoMovePending = true;   // start auto‑move sequence
+                        autoMovePending = true;   // mark that we are moving for alarm
                         updateDisplay();
                     }
                 }
@@ -141,7 +129,7 @@ void loop() {
         autoMovePending = false;        // movement done
         lidServo.open();
         lidOpen = true;
-        lidAutoOpened = true;           // remember that lid was opened by device
+        lidAutoOpened = true;           // remember lid was opened automatically
         updateDisplay();
     }
 
@@ -149,7 +137,7 @@ void loop() {
     if (nextButton.wasPressed()) {
         // Short press: manual move
         if (lidAutoOpened) {
-            lidAutoOpened = false;       // user manually moved, so no auto‑home needed
+            lidAutoOpened = false;       // user manually moved, cancel auto‑open flag
         }
         stepper.moveToNextContainer(currentContainer, pendingHome);
         updateDisplay();
@@ -164,16 +152,15 @@ void loop() {
             nextButtonPressed = true;
             nextButtonPressStart = millis();
         } else if (millis() - nextButtonPressStart >= 5000) {
-            // 5 seconds long press – wake WiFi if it's off
             if (!wifi.isAPActive()) {
                 Serial.println("Long press: waking WiFi");
                 wifi.startAP();
-                display.showMessage("WiFi ON", 1500); // optional visual feedback
+                display.showMessage("WiFi ON", 1500);
             }
             nextButtonPressed = false;   // prevent repeated triggering
         }
     } else {
-        nextButtonPressed = false;       // button released
+        nextButtonPressed = false;
     }
 
     // ---- Button: Lid ----
@@ -182,10 +169,9 @@ void loop() {
         if (buzzer.isAlarming()) {
             acknowledgeAlarm();
         }
-        // If lid was closed and it was previously opened automatically, schedule homing
+        // If lid was closed after an automatic open, just clear the flag (no homing)
         if (!lidOpen && lidAutoOpened) {
-            pendingAutoHome = true;
-            lidAutoOpened = false;
+            lidAutoOpened = false;       // lid closed, stay at current container
         }
 
         // Reset WiFi timeout (client activity)
@@ -195,24 +181,6 @@ void loop() {
     // ---- Homing after wrap‑around (from next button when at last container) ----
     if (pendingHome && !stepper.isMoving()) {
         performHomeAfterWrap();
-    }
-
-    // ---- Homing after auto‑move and lid close ----
-    if (pendingAutoHome && !stepper.isMoving() && !pendingHome) {
-        AccelStepper& s = stepper.getStepper();
-        s.setSpeed(-200);
-        while (digitalRead(LIMIT_SWITCH) == HIGH) {
-            s.runSpeed();
-            lidServo.update();
-            buzzer.update();
-        }
-        s.stop();
-        s.setCurrentPosition(0);
-        pendingAutoHome = false;
-        stepper.resetTargetPosition();   // reset stored target in StepperManager
-        stepper.begin();
-        s.disableOutputs();
-        updateDisplay();
     }
 
     // ---- Update display on alarm state change ----
@@ -254,6 +222,7 @@ void performHomeAfterWrap() {
     stepper.resetTargetPosition();
     stepper.begin();
     s.disableOutputs();
+    currentContainer = 0;          // update container index
     updateDisplay();
 }
 
@@ -278,19 +247,18 @@ String formatExpiry(uint64_t timestamp_ms) {
 void onDataReceived(const JsonDocument& doc) {
     Serial.println("Processing received data...");
 
-    // Update RTC time (phone sends UTC seconds)
     if (doc["unixTime"].is<long>()) {
-        long unixTime = doc["unixTime"];          // UTC seconds
-        // Convert to local time (UTC+8) before storing in RTC
-        unixTime += 8 * 3600;
+        long unixTime = doc["unixTime"];
+        unixTime += 8 * 3600;          // UTC+8
         rtc.setUnixTime(unixTime);
-        Serial.printf("RTC set to local time (UTC+8): %s", asctime(localtime(&unixTime)));
+        // Immediately update local time variables
+        currentHour = rtc.getHour();
+        currentMinute = rtc.getMinute();
+        Serial.printf("RTC set to local time: %02d:%02d\n", currentHour, currentMinute);
     }
 
-    // Save the incoming data to flash
     saveMedicineData(doc);
 
-    // Update in‑memory storage
     medicineStorage.clear();
     JsonArrayConst medicines = doc["medicines"].as<JsonArrayConst>();
     for (JsonObjectConst obj : medicines) {
