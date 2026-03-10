@@ -14,6 +14,7 @@ public:
     void begin();
     void open();
     void close();
+    void reAttach();
     void toggle(bool &lidOpen);      // updates lidOpen state
     void update();                   // must be called regularly
 

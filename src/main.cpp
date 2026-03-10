@@ -26,7 +26,6 @@ RTCManager rtc;
 int currentContainer = 0;
 bool lidOpen = false;
 bool pendingHome = false;          // true after wrap‑around (needs homing)
-bool alarmAcknowledged = false;
 bool autoMovePending = false;      // true during auto‑move to due container
 bool lidAutoOpened = false;        // true after lid opened automatically
 
@@ -102,9 +101,7 @@ void loop() {
         currentMinute = rtc.getMinute();
         updateDisplay();
 
-        if (!alarmAcknowledged) {
-            buzzer.checkScheduledAlarm(currentHour, currentMinute);
-        }
+        buzzer.checkScheduledAlarm(currentHour, currentMinute);
 
         // Check for automatic rotation to due medicine (once per minute)
         static int lastAutoCheckMinute = -1;
@@ -205,7 +202,7 @@ void toggleLid() {
 
 void acknowledgeAlarm() {
     buzzer.stopAlarm();
-    alarmAcknowledged = true;
+    lidServo.reAttach();
 }
 
 void performHomeAfterWrap() {

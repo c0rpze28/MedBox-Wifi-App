@@ -23,6 +23,11 @@ void LidServo::close() {
     if (servo) servo->startEaseTo(CLOSED_ANGLE);
 }
 
+void LidServo::reAttach() {
+    if (servo) servo->attach(SERVO_PIN, 500, 2400);
+    if (servo) servo->startEaseTo(CLOSED_ANGLE);
+}
+
 void LidServo::toggle(bool &lidOpen) {
     if (lidOpen) {
         close();

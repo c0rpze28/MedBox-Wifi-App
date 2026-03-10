@@ -6,7 +6,7 @@
 #include <RtcDS1302.h>
 
 // Your actual pin assignments
-#define RTC_RST 27  // CE/RST
+#define RTC_RST 4  // CE/RST
 #define RTC_DAT 23  // IO
 #define RTC_CLK 14  // SCLK
 
